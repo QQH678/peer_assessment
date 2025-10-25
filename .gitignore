@@ -1,1 +1,9 @@
 
+# 忽略 data 文件夹
+data/
+
+# 也建议忽略 Python 缓存和 IDE 文件
+__pycache__/
+*.pyc
+.idea/
+.env
