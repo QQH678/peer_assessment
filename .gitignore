@@ -9,3 +9,4 @@ __pycache__/
 .env
 
 md/
+models/sentence_transformers/
