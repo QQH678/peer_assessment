@@ -34,7 +34,7 @@ class MemoryItem(BaseModel):
     
     # 内容
     content: str = Field(description="记忆内容描述")
-    structured_data: Dict[str, Any] = Field(default_factory=dict, description="结构化数据")
+    # 注意: structured_data 已删除（始终为空字典，无实际用途）
     
     # 优先级相关因子
     importance: float = Field(default=0.5, ge=0.0, le=1.0, description="重要性[0-1]")
@@ -42,12 +42,10 @@ class MemoryItem(BaseModel):
     access_count: int = Field(default=0, description="访问次数")
     last_accessed: Optional[datetime] = Field(default=None, description="最后访问时间")
     
-    # 语义编码
-    embedding: Optional[List[float]] = Field(default=None, description="语义向量")
-    
-    # 关联
-    related_knowledge_points: List[str] = Field(default_factory=list, description="相关知识点")
-    related_memory_ids: List[str] = Field(default_factory=list, description="相关记忆ID")
+    # 注意: 以下字段已删除以减少存储空间和提高可读性
+    # - embedding: 运行时动态计算，不需要持久化（占用17%文件空间）
+    # - related_knowledge_points: 功能未实现，始终为空
+    # - related_memory_ids: 功能未实现，始终为空
     
     # 标记
     is_breakthrough: bool = Field(default=False, description="是否突破性事件")

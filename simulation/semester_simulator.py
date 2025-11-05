@@ -207,6 +207,10 @@ class SemesterSimulator:
                     )
                     # 保存报告到文件
                     self._save_stage_reports(semester.id, stage_count, reports)
+                    
+                    # 保存报告以便后续生成综合报告
+                    semester.all_stage_reports[f"stage_{stage_count}"] = reports
+                    
                     print(f"      ✓ 生成{len(reports)}份学情报告")
                 except Exception as e:
                     logging.warning(f"学情报告生成失败: {e}")
@@ -218,7 +222,22 @@ class SemesterSimulator:
             print(f"\n5. 保存学生记忆状态...")
             self._save_student_memories(semester, student_agents_map)
         
-        # 7. 保存模拟结果
+        # 7. 生成学期综合报告（新增）
+        print(f"\n6. 生成学生综合学情报告...")
+        try:
+            comprehensive_reports = self.teacher_agent.generate_comprehensive_student_reports(
+                semester=semester,
+                stage_reports_dict=semester.all_stage_reports,
+                output_dir=None,  # 使用默认目录
+                use_v0_api=False  # 默认不调用V0 API，仅生成prompt
+            )
+            print(f"   ✓ 已生成{len(comprehensive_reports.get('reports', {}))}份综合学情报告")
+        except Exception as e:
+            logging.error(f"生成综合报告失败: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
+        
+        # 8. 保存模拟结果
         self._save_semester_simulation(semester)
         
         print(f"\n=== 学期模拟完成 ===")
@@ -556,6 +575,14 @@ class SemesterSimulator:
                 student = next((s for s in semester.students if s.id == student_id), None)
                 if not student:
                     continue
+                
+                # 【新增】保存元认知调节器
+                if hasattr(agent, 'metacognitive_regulator') and agent.metacognitive_regulator:
+                    try:
+                        agent.metacognitive_regulator.save()
+                        logging.info(f"学生 {student.name} 的元认知调节器已保存")
+                    except Exception as reg_error:
+                        logging.warning(f"学生 {student.name} 的调节器保存失败: {reg_error}")
                 
                 # 从新记忆系统获取记忆数据
                 if hasattr(agent, 'new_memory_system') and agent.new_memory_system:

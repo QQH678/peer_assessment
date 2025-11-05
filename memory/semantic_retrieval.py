@@ -8,6 +8,13 @@ from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 import logging
 import os
+import time
+
+# 在导入 SentenceTransformer 之前设置离线模式环境变量
+# 这样可以防止它尝试联网验证模型
+os.environ['TRANSFORMERS_OFFLINE'] = '1'
+os.environ['HF_HUB_OFFLINE'] = '1'
+os.environ['HF_DATASETS_OFFLINE'] = '1'
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -24,10 +31,76 @@ except ImportError:
     logging.warning("faiss not installed. Install with: pip install faiss-cpu")
 
 
+def load_model_with_retry(model_name: str, cache_folder: str, max_retries: int = 1, timeout: int = 120) -> Optional[SentenceTransformer]:
+    """
+    带重试机制的模型加载器 - 优先使用本地缓存，完全离线
+    
+    Args:
+        model_name: 模型名称
+        cache_folder: 缓存目录
+        max_retries: 最大重试次数（默认1次，因为本地加载应该立即成功）
+        timeout: 每次尝试的超时时间（秒）
+    
+    Returns:
+        加载的模型或None
+    """
+    # 支持多种本地缓存路径格式
+    # 格式1: 直接目录 {cache_folder}/{model_name}
+    direct_path = os.path.join(cache_folder, model_name)
+    # 格式2: HuggingFace标准格式 {cache_folder}/models--sentence-transformers--{model_name}
+    hf_cache_path = os.path.join(cache_folder, f"models--sentence-transformers--{model_name}")
+    
+    # 检查哪个路径存在
+    if os.path.exists(direct_path):
+        logging.info(f"Found model in direct format: {direct_path}")
+        try:
+            model = SentenceTransformer(direct_path, device='cpu')
+            logging.info(f"✓ Successfully loaded model from: {direct_path}")
+            return model
+        except Exception as e:
+            logging.error(f"Failed to load model from {direct_path}: {e}")
+    
+    elif os.path.exists(hf_cache_path):
+        logging.info(f"Found model in HuggingFace cache format: {hf_cache_path}")
+        try:
+            # 对于HuggingFace缓存格式，需要使用模型名称 + cache_folder参数
+            # SentenceTransformer会自动在cache_folder中查找HF格式的缓存
+            logging.info(f"Loading from HF cache using model name: {model_name}")
+            model = SentenceTransformer(model_name, cache_folder=cache_folder, device='cpu')
+            logging.info(f"✓ Successfully loaded model from HF cache")
+            return model
+        except Exception as e:
+            logging.error(f"Failed to load model from HF cache: {e}")
+            # 如果上面失败了，尝试直接使用snapshots路径
+            try:
+                snapshots_dir = os.path.join(hf_cache_path, "snapshots")
+                if os.path.exists(snapshots_dir):
+                    # 找到最新的snapshot
+                    snapshots = os.listdir(snapshots_dir)
+                    if snapshots:
+                        latest_snapshot = os.path.join(snapshots_dir, snapshots[0])
+                        logging.info(f"Trying snapshot path: {latest_snapshot}")
+                        model = SentenceTransformer(latest_snapshot, device='cpu')
+                        logging.info(f"✓ Successfully loaded model from snapshot")
+                        return model
+            except Exception as e2:
+                logging.error(f"Failed to load from snapshot: {e2}")
+    
+    # 如果本地没有模型，给出明确提示
+    logging.error(f"Model {model_name} not found in cache folder: {cache_folder}")
+    logging.error(f"Expected paths:")
+    logging.error(f"  - {direct_path}")
+    logging.error(f"  - {hf_cache_path}")
+    logging.error(f"Please run: python auto_download_model.py")
+    return None
+
+
 class SemanticEncoder:
     """语义编码器 - 使用预训练模型进行语义向量化"""
     
-    def __init__(self, model_name: str = "paraphrase-multilingual-MiniLM-L12-v2"):
+    def __init__(self, model_name: str = "paraphrase-multilingual-MiniLM-L12-v2", 
+                 cache_folder: Optional[str] = None,
+                 fallback_models: Optional[List[str]] = None):
         """
         初始化语义编码器
         
@@ -35,6 +108,12 @@ class SemanticEncoder:
         - paraphrase-multilingual-MiniLM-L12-v2: 支持中文，维度384，速度快
         - paraphrase-multilingual-mpnet-base-v2: 支持中文，维度768，效果更好
         - distiluse-base-multilingual-cased-v2: 多语言，维度512
+        - all-MiniLM-L6-v2: 英文，维度384，非常快
+        
+        Args:
+            model_name: 模型名称或本地路径
+            cache_folder: 模型缓存目录，默认为 ./models/sentence_transformers
+            fallback_models: 备选模型列表（如果主模型加载失败）
         """
         if not SENTENCE_TRANSFORMERS_AVAILABLE:
             raise ImportError(
@@ -42,11 +121,28 @@ class SemanticEncoder:
                 "Install with: pip install sentence-transformers"
             )
         
-        self.model_name = model_name
-        self.model = SentenceTransformer(model_name)
-        self.dimension = self.model.get_sentence_embedding_dimension()
+        # 设置缓存目录
+        if cache_folder is None:
+            cache_folder = os.path.join(os.path.dirname(__file__), "..", "models", "sentence_transformers")
         
-        logging.info(f"Semantic encoder initialized: {model_name}, dimension={self.dimension}")
+        os.makedirs(cache_folder, exist_ok=True)
+        
+        self.cache_folder = cache_folder
+        
+        # 只尝试加载主模型（已下载的模型）
+        logging.info(f"Loading model: {model_name} from {cache_folder}")
+        self.model = load_model_with_retry(model_name, cache_folder, max_retries=1)
+        
+        if self.model is None:
+            raise RuntimeError(
+                f"Failed to load semantic model: {model_name}. "
+                f"Please ensure the model is downloaded to {cache_folder}. "
+                f"Run: python auto_download_model.py"
+            )
+        
+        self.model_name = model_name
+        self.dimension = self.model.get_sentence_embedding_dimension()
+        logging.info(f"✓ Semantic encoder ready: {self.model_name}, dimension={self.dimension}")
     
     def encode(self, text: str) -> np.ndarray:
         """编码单个文本"""

@@ -189,6 +189,45 @@ python main.py --experiment semester \
     --use-new-memory \
     --enable-teacher-analysis
 ```
+# 简化版 (推荐用于测试)
+python main.py --experiment semester \
+    --course-name "数据结构与算法" \
+    --subject "计算机科学" \
+    --student-count 4 \
+    --duration-weeks 16 \
+    --evaluations-per-work 4 \
+    --rounds-per-stage 2 \
+    --peers-per-round 2 \
+    --use-new-memory \
+    --enable-teacher-analysis
+```
+
+### 🆕 综合学情报告生成
+
+学期模拟完成后，系统会自动为每位学生生成综合学情报告：
+
+```bash
+# 报告位置
+cd data/semester_<id>/comprehensive_reports/
+
+# 包含以下文件：
+# - report_<student_id>.json    # 完整数据
+# - report_<student_id>.md      # 人类可读格式
+# - visualization_prompt_<student_id>.txt  # V0可视化Prompt
+```
+
+**报告内容：**
+- 📝 文字评价：总体评价、分项评价、优势与成就、改进建议
+- 📊 数据可视化：成绩趋势、知识掌握雷达图、元认知发展曲线等
+- 🎨 V0集成：可直接复制Prompt到 https://v0.dev 生成交互式Dashboard
+
+**详细文档：**
+- [QUICK_REFERENCE.md](./QUICK_REFERENCE.md) - 快速参考
+- [COMPREHENSIVE_REPORT_GUIDE.md](./COMPREHENSIVE_REPORT_GUIDE.md) - 完整指南
+
+**快速演示：**
+```bash
+python demo_comprehensive_report.py --mode quick
 
 3. **🆕 系统演示**
 ```bash

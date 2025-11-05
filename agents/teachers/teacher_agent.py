@@ -4,10 +4,12 @@ from models.data_models import Course, KnowledgePoint, TeachingStage, Assignment
 from config.settings import Config
 from config.peer_review_config import PeerReviewConfig
 from agents.teachers.teacher_analyzer import TeacherAnalyzer
+from agents.teachers.student_report_generator import StudentReportGenerator
 from memory.new_memory_models import TeacherFeedbackMemory
 import json
 import logging
 import uuid
+import os
 
 class TeacherAgent:
     """教师代理，负责课程设计、知识点规划、阶段性教学和学生分析"""
@@ -479,11 +481,180 @@ class TeacherAgent:
                 importance=0.9  # 教师反馈重要性高
             )
             
+            
             student_agent.new_memory_system.add_memory(feedback_memory)
             logging.info(f"教师反馈已添加到学生 {student_agent.student.id} 的记忆系统")
             
         except Exception as e:
-            logging.error(f"添加教师反馈失败: {e}")
+            logging.error(f"添加阶段报告失败: {e}")
+    
+    def generate_comprehensive_student_reports(
+        self,
+        semester: Any,
+        stage_reports_dict: Dict[str, List[Dict[str, Any]]],
+        output_dir: Optional[str] = None,
+        use_v0_api: bool = False
+    ) -> Dict[str, Any]:
+        """
+        为每位学生生成综合学情报告
+        
+        Args:
+            semester: 学期模拟对象
+            stage_reports_dict: {stage_id: [reports]}各阶段报告字典
+            output_dir: 输出目录，如果为None则使用默认目录
+            use_v0_api: 是否调用V0 API生成可视化组件（默认False，仅生成prompt）
+            
+        Returns:
+            Dict包含：
+                - reports: {student_id: ComprehensiveStudentReport}
+                - saved_paths: {student_id: file_paths}
+                - v0_responses: {student_id: v0_response} (如果use_v0_api=True)
+        """
+        logging.info(f"开始为学生生成综合学情报告")
+        
+        # 初始化报告生成器
+        report_generator = StudentReportGenerator()
+        
+        # 确定输出目录
+        if output_dir is None:
+            output_dir = os.path.join(
+                Config.DATA_DIR,
+                f"semester_{semester.id}",
+                "comprehensive_reports"
+            )
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # 准备学期数据
+        semester_data = {
+            'semester_id': semester.id,
+            'works': [work.dict() if hasattr(work, 'dict') else work for work in semester.works],
+            'evaluations': [eval.dict() if hasattr(eval, 'dict') else eval for eval in semester.evaluations]
+        }
+        
+        # 准备课程信息
+        course_info = {
+            'course_name': semester.course.name,
+            'subject': semester.course.subject,
+            'description': semester.course.description
+        }
+        
+        # 为每位学生生成报告
+        all_reports = {}
+        saved_paths = {}
+        v0_responses = {}
+        
+        for i, student in enumerate(semester.students, 1):
+            try:
+                print(f"  [{i}/{len(semester.students)}] 生成 {student.name} 的报告...")
+                
+                # 收集该学生的所有阶段报告
+                student_stage_reports = []
+                for stage_id, reports in stage_reports_dict.items():
+                    # reports 是一个字典 {student_id: report}
+                    if isinstance(reports, dict):
+                        # 从字典中获取该学生的报告
+                        if student.id in reports:
+                            report = reports[student.id]
+                            # 转换为字典格式
+                            if isinstance(report, dict):
+                                student_stage_reports.append(report)
+                            elif hasattr(report, 'dict'):
+                                student_stage_reports.append(report.dict())
+                            else:
+                                student_stage_reports.append(report)
+                    elif isinstance(reports, list):
+                        # 如果是列表，遍历查找
+                        for report in reports:
+                            if isinstance(report, dict):
+                                if report.get('student_id') == student.id:
+                                    student_stage_reports.append(report)
+                            elif hasattr(report, 'student_id'):
+                                if report.student_id == student.id:
+                                    student_stage_reports.append(report.dict() if hasattr(report, 'dict') else report)
+                
+                # 生成综合报告
+                comprehensive_report = report_generator.generate_comprehensive_report(
+                    student=student,
+                    semester_data=semester_data,
+                    stage_reports=student_stage_reports,
+                    course_info=course_info
+                )
+                
+                all_reports[student.id] = comprehensive_report
+                
+                # 保存报告到文件
+                report_generator.save_report_to_file(comprehensive_report, output_dir)
+                
+                saved_paths[student.id] = {
+                    'json': os.path.join(output_dir, f"report_{student.id}.json"),
+                    'markdown': os.path.join(output_dir, f"report_{student.id}.md"),
+                    'prompt': os.path.join(output_dir, f"visualization_prompt_{student.id}.txt")
+                }
+                
+                # 如果启用V0 API，生成可视化组件
+                if use_v0_api:
+                    try:
+                        from utils.v0_api_client import V0ApiClient
+                        v0_client = V0ApiClient()
+                        
+                        v0_response = v0_client.generate_component(
+                            prompt=comprehensive_report.visualization_prompt,
+                            component_name=f"StudentReport_{student.id}"
+                        )
+                        
+                        v0_responses[student.id] = v0_response
+                        
+                        # 保存组件到单独的目录
+                        component_dir = os.path.join(output_dir, "v0_components")
+                        v0_client.save_component_locally(
+                            response=v0_response,
+                            output_dir=component_dir,
+                            filename=f"StudentReport_{student.name}.tsx"
+                        )
+                        
+                        print(f"    ✓ 已生成可视化组件")
+                        
+                    except Exception as e:
+                        logging.warning(f"V0组件生成失败: {e}")
+                        v0_responses[student.id] = {"success": False, "error": str(e)}
+                
+                print(f"    ✓ 报告已保存")
+                
+            except Exception as e:
+                logging.error(f"生成学生 {student.name} 的报告失败: {e}")
+                import traceback
+                logging.error(traceback.format_exc())
+                continue
+        
+        # 生成汇总信息
+        summary = {
+            'total_students': len(semester.students),
+            'reports_generated': len(all_reports),
+            'output_directory': output_dir,
+            'generated_at': json.dumps(all_reports[list(all_reports.keys())[0]].generated_at if all_reports else None, default=str)
+        }
+        
+        # 保存汇总信息
+        summary_file = os.path.join(output_dir, "generation_summary.json")
+        with open(summary_file, 'w', encoding='utf-8') as f:
+            json.dump(summary, f, ensure_ascii=False, indent=2, default=str)
+        
+        print(f"\n✓ 综合报告生成完成！")
+        print(f"  - 共生成 {len(all_reports)} 份报告")
+        print(f"  - 保存位置: {output_dir}")
+        if use_v0_api:
+            print(f"  - V0组件生成: {len([r for r in v0_responses.values() if r.get('success')])} 个成功")
+        
+        result = {
+            'reports': all_reports,
+            'saved_paths': saved_paths,
+            'summary': summary
+        }
+        
+        if use_v0_api:
+            result['v0_responses'] = v0_responses
+        
+        return result
     
     def generate_stage_reports(
         self,
@@ -534,28 +705,48 @@ class TeacherAgent:
     ):
         """将阶段报告添加到学生记忆"""
         try:
-            report_memory = TeacherFeedbackMemory(
+            # 检查是否有新记忆系统
+            if not hasattr(student_agent, 'new_memory_system') or student_agent.new_memory_system is None:
+                logging.warning(f"学生 {student_agent.student.id} 没有新记忆系统，跳过添加阶段报告")
+                return
+            
+            # 安全获取报告属性
+            stage_name = getattr(report, 'stage_name', '未知阶段')
+            final_knowledge_mastery = getattr(report, 'final_knowledge_mastery', {})
+            knowledge_growth_rate = getattr(report, 'knowledge_growth_rate', {})
+            metacognition_trajectory = getattr(report, 'metacognition_trajectory', [])
+            avg_evaluation_quality_given = getattr(report, 'avg_evaluation_quality_given', 0.5)
+            detailed_feedback = getattr(report, 'detailed_feedback', '暂无详细反馈')
+            strengths = getattr(report, 'strengths', [])
+            weaknesses = getattr(report, 'weaknesses', [])
+            next_stage_focus = getattr(report, 'next_stage_focus', [])
+            overall_performance = getattr(report, 'overall_performance', '一般')
+            
+            # 创建教师反馈记忆
+            stage_report_memory = TeacherFeedbackMemory(
                 id=f"mem_stage_report_{stage_id}_{student_agent.student.id}_{uuid.uuid4().hex[:8]}",
-                content=f"{report.stage_name}阶段学情报告",
+                content=f"{stage_name}阶段学情报告",
                 round_id=f"stage_{stage_id}",
                 stage_id=stage_id,
-                knowledge_state=report.final_knowledge_mastery,
-                knowledge_growth=report.knowledge_growth_rate,
-                metacognition_level=report.metacognition_trajectory[-1][1] if report.metacognition_trajectory else 0.5,
+                knowledge_state=final_knowledge_mastery,
+                knowledge_growth=knowledge_growth_rate,
+                metacognition_level=metacognition_trajectory[-1][1] if metacognition_trajectory else 0.5,
                 evaluation_quality={
-                    "overall": report.avg_evaluation_quality_given
+                    "overall": avg_evaluation_quality_given
                 },
-                feedback_content=report.detailed_feedback,
-                strengths=report.strengths,
-                weaknesses=report.weaknesses,
-                recommendations=report.next_stage_focus,
+                feedback_content=detailed_feedback,
+                strengths=strengths,
+                weaknesses=weaknesses,
+                recommendations=next_stage_focus,
                 is_stage_report=True,
-                stage_summary=f"整体表现：{report.overall_performance}",
+                stage_summary=f"整体表现：{overall_performance}",
                 importance=1.0  # 阶段报告非常重要
             )
             
-            student_agent.new_memory_system.add_memory(report_memory)
+            student_agent.new_memory_system.add_memory(stage_report_memory)
             logging.info(f"阶段报告已添加到学生 {student_agent.student.id} 的记忆系统")
             
         except Exception as e:
             logging.error(f"添加阶段报告失败: {e}")
+            import traceback
+            logging.error(traceback.format_exc())

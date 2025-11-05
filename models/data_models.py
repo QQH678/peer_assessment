@@ -253,6 +253,7 @@ class SemesterSimulation(BaseModel):
     works: List[StudentWork] = Field(default_factory=list, description="学生作品")
     evaluations: List[PeerEvaluation] = Field(default_factory=list, description="互评记录")
     stage_history: List[Dict[str, Any]] = Field(default_factory=list, description="阶段历史记录")
+    all_stage_reports: Dict[str, List[Dict[str, Any]]] = Field(default_factory=dict, description="各阶段学情报告集合")
     
     def get_kp_resolver(self):
         """获取知识点解析器

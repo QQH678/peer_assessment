@@ -55,13 +55,24 @@ class StudentAgent:
         # 使用新记忆系统的标志
         self.use_new_memory = memory_config.get("use_new_memory", True) if memory_config else True
         
+        # 【新增】初始化元认知调节器
+        from tools.metacognitive_regulator import create_regulator_for_student
+        self.metacognitive_regulator = create_regulator_for_student(student.id)
+        logging.info(f"元认知调节器已为学生 {student.name} 创建")
+        
         # 性能跟踪
         self.performance_metrics = {
             "assignments_completed": 0,
             "average_performance": 0.0,
             "memory_usage_frequency": 0,
-            "learning_effectiveness": 0.0
+            "learning_effectiveness": 0.0,
+            "current_round": 0,  # 【新增】当前轮次
+            "total_evaluations": 0,  # 【新增】总评价次数
+            "recent_scores": []  # 【新增】最近分数列表
         }
+        
+        # 【新增】追踪上一次分数（用于计算学习增益）
+        self.last_assignment_score = 0.5
         
         logging.info(f"学生Agent初始化: {student.name}, 使用新记忆系统: {self.use_new_memory}")
     
@@ -70,17 +81,43 @@ class StudentAgent:
         logging.info(f"开始完成作业 - 学生: {self.student.name}, 作业: {assignment.title}")
         start_time = datetime.now()
         
+        # 【新增】使用元认知调节器调节记忆检索权重
+        adjusted_weights = self._regulate_memory_weights(assignment, course)
+        logging.info(f"记忆权重已调节: {adjusted_weights}")
+        
         # 构建记忆上下文
         logging.info(f"构建记忆上下文 - 学生: {self.student.name}")
         memory_context = self._build_memory_context(assignment, course)
         
         # 检索相关经验案例
         logging.info(f"检索相关经验案例 - 学生: {self.student.name}")
-        retrieval_result = self.memory_system.retrieve_relevant_cases(
-            current_problem=f"{assignment.title}: {assignment.description}",
-            context=memory_context,
-            max_cases=3
-        )
+        
+        # 如果使用新记忆系统，从新系统检索
+        if self.use_new_memory:
+            # 构建查询
+            query = f"{assignment.title}: {assignment.description}"
+            
+            # 从新记忆系统检索相关记忆
+            new_retrieval_result = self.new_memory_system.retrieve(
+                query=query,
+                dimension_filter=[
+                    MemoryDimension.LEARNING,
+                    MemoryDimension.PEER_EVALUATION,
+                    MemoryDimension.RECEIVED_EVALUATION
+                ],
+                top_k=5
+            )
+            
+            # 转换为旧格式以兼容现有代码
+            retrieval_result = self._convert_new_to_old_retrieval(new_retrieval_result, memory_context)
+            logging.info(f"从新记忆系统检索到 {len(new_retrieval_result.retrieved_memories)} 条记忆")
+        else:
+            # 使用旧系统（向后兼容）
+            retrieval_result = self.memory_system.retrieve_relevant_cases(
+                current_problem=f"{assignment.title}: {assignment.description}",
+                context=memory_context,
+                max_cases=3
+            )
         
         # 触发增强版经验回放（结合检索结果）
         logging.info(f"触发增强版经验回放 - 学生: {self.student.name}")
@@ -144,6 +181,13 @@ class StudentAgent:
         
         # 更新性能指标
         self._update_performance_metrics(learning_outcome, retrieval_result)
+        
+        # 【新增】提供反馈给元认知调节器
+        assignment_score = learning_outcome.score / 100.0  # 归一化到0-1
+        evaluation_quality = 0.7  # 默认评价质量（可以根据作业完成情况估计）
+        if learning_outcome.success:
+            evaluation_quality = 0.8
+        self._update_regulator_with_feedback(assignment_score, evaluation_quality)
         
         # 更新传统记忆系统（保持兼容性）
         self._update_legacy_memory(assignment, work, course)
@@ -360,6 +404,9 @@ class StudentAgent:
         """更新性能指标"""
         self.performance_metrics["assignments_completed"] += 1
         
+        # 【新增】更新当前轮次
+        self.performance_metrics["current_round"] += 1
+        
         # 更新平均性能
         current_avg = self.performance_metrics["average_performance"]
         count = self.performance_metrics["assignments_completed"]
@@ -378,6 +425,157 @@ class StudentAgent:
         memory_stats = self.memory_system.get_memory_statistics()
         memory_stats.update(self.performance_metrics)
         return memory_stats
+    
+    # ==================== 元认知调节器相关方法 ====================
+    
+    def _regulate_memory_weights(self, assignment: Assignment, course: Optional['Course']) -> Dict[str, float]:
+        """
+        【新增方法】根据学习情境调节记忆检索权重
+        
+        使用元认知调节器动态调整记忆检索的4个权重参数：
+        - weight_relevance: 相关性权重
+        - weight_recency: 时新性权重
+        - weight_importance: 重要性权重
+        - weight_success: 成功度权重
+        """
+        from tools.metacognitive_regulator import regulate_memory_weights
+        
+        # 1. 估计任务难度（基于描述长度和难度等级）
+        task_difficulty = assignment.difficulty_level / 5.0 if hasattr(assignment, 'difficulty_level') else 0.5
+        if hasattr(assignment, 'description'):
+            # 描述越长，任务越复杂
+            desc_length_factor = min(1.0, len(assignment.description) / 500.0)
+            task_difficulty = (task_difficulty + desc_length_factor) / 2.0
+        
+        # 2. 估计任务新颖度（基于知识点）
+        if course and hasattr(assignment, 'knowledge_points_covered') and assignment.knowledge_points_covered:
+            known_kps = set(self.student.knowledge_mastery.keys())
+            required_kps = set(assignment.knowledge_points_covered)
+            new_kps = required_kps - known_kps
+            task_novelty = len(new_kps) / max(1, len(required_kps))
+        else:
+            task_novelty = 0.5  # 默认中等新颖度
+        
+        # 3. 当前掌握度（基于知识点平均掌握度）
+        if hasattr(assignment, 'knowledge_points_covered') and assignment.knowledge_points_covered:
+            mastery_scores = [
+                self.student.knowledge_mastery.get(kp_id, 0.5)
+                for kp_id in assignment.knowledge_points_covered
+            ]
+            current_mastery = sum(mastery_scores) / len(mastery_scores) if mastery_scores else 0.5
+        else:
+            current_mastery = 0.5
+        
+        # 4. 最近表现（最近3次作业平均分）
+        recent_scores = self.performance_metrics.get('recent_scores', [])[-3:]
+        recent_performance = sum(recent_scores) / len(recent_scores) if recent_scores else 0.5
+        
+        # 5. 元认知水平（从新记忆系统获取或使用默认值）
+        if hasattr(self.new_memory_system, 'memory_state') and hasattr(self.new_memory_system.memory_state, 'metacognition_history'):
+            meta_history = self.new_memory_system.memory_state.metacognition_history
+            if meta_history:
+                metacognition_level = meta_history[-1][1]
+            else:
+                metacognition_level = 0.7  # 默认中等水平
+        else:
+            metacognition_level = 0.7
+        
+        # 6. 记忆状态
+        stm_size = len(self.new_memory_system.stm) if hasattr(self.new_memory_system, 'stm') else 0
+        ltm_size = len(self.new_memory_system.ltm) if hasattr(self.new_memory_system, 'ltm') else 0
+        
+        # 7. 计算平均记忆年龄
+        current_round = self.performance_metrics.get('current_round', 1)
+        avg_memory_age = self._calculate_avg_memory_age(current_round)
+        
+        # 8. 互评状态
+        evaluation_round = current_round
+        total_evaluations = self.performance_metrics.get('total_evaluations', 0)
+        
+        # 调用元认知调节器
+        adjusted_weights = regulate_memory_weights(
+            regulator=self.metacognitive_regulator,
+            task_difficulty=task_difficulty,
+            task_novelty=task_novelty,
+            current_mastery=current_mastery,
+            recent_performance=recent_performance,
+            metacognition_level=metacognition_level,
+            stm_size=stm_size,
+            ltm_size=ltm_size,
+            avg_memory_age=avg_memory_age,
+            evaluation_round=evaluation_round,
+            total_evaluations=total_evaluations
+        )
+        
+        # 应用调节后的权重到记忆检索配置
+        if hasattr(self.new_memory_system, 'retrieval_config'):
+            self.new_memory_system.retrieval_config.weight_relevance = adjusted_weights['relevance']
+            self.new_memory_system.retrieval_config.weight_recency = adjusted_weights['recency']
+            self.new_memory_system.retrieval_config.weight_importance = adjusted_weights['importance']
+            self.new_memory_system.retrieval_config.weight_success = adjusted_weights['success']
+            
+            logging.info(f"[{self.student.name}] 权重已应用: "
+                        f"相关性={adjusted_weights['relevance']:.3f}, "
+                        f"时新性={adjusted_weights['recency']:.3f}, "
+                        f"重要性={adjusted_weights['importance']:.3f}, "
+                        f"成功度={adjusted_weights['success']:.3f}")
+        
+        return adjusted_weights
+    
+    def _calculate_avg_memory_age(self, current_round: int) -> float:
+        """计算平均记忆年龄"""
+        if not hasattr(self.new_memory_system, 'stm') or not hasattr(self.new_memory_system, 'ltm'):
+            return 5.0  # 默认值
+        
+        ages = []
+        
+        # 计算短期记忆年龄
+        for memory in self.new_memory_system.stm:
+            if hasattr(memory, 'round_created'):
+                ages.append(current_round - memory.round_created)
+        
+        # 计算长期记忆年龄
+        for memory in self.new_memory_system.ltm:
+            if hasattr(memory, 'round_created'):
+                ages.append(current_round - memory.round_created)
+        
+        return sum(ages) / len(ages) if ages else 5.0
+    
+    def _update_regulator_with_feedback(self, assignment_score: float, evaluation_quality: float):
+        """
+        【新增方法】提供反馈给元认知调节器
+        
+        Args:
+            assignment_score: 作业得分 (0-1)
+            evaluation_quality: 评价质量 (0-1)
+        """
+        from tools.metacognitive_regulator import update_regulator
+        
+        # 计算学习增益
+        learning_gain = max(0.0, assignment_score - self.last_assignment_score)
+        
+        # 更新调节器
+        update_regulator(
+            regulator=self.metacognitive_regulator,
+            assignment_score=assignment_score,
+            evaluation_quality=evaluation_quality,
+            learning_gain=learning_gain
+        )
+        
+        # 更新上一次分数
+        self.last_assignment_score = assignment_score
+        
+        # 记录到最近分数列表
+        self.performance_metrics['recent_scores'].append(assignment_score)
+        if len(self.performance_metrics['recent_scores']) > 10:
+            self.performance_metrics['recent_scores'] = self.performance_metrics['recent_scores'][-10:]
+        
+        logging.info(f"[{self.student.name}] 调节器已更新: "
+                    f"分数={assignment_score:.2f}, "
+                    f"质量={evaluation_quality:.2f}, "
+                    f"增益={learning_gain:.2f}")
+    
+    # ==================== 元认知调节器相关方法结束 ====================
     
     def save_memory_state(self, base_path: str):
         """保存记忆状态"""
@@ -793,6 +991,65 @@ class StudentAgent:
         
         return scores
     
+    def _convert_new_to_old_retrieval(self, new_result, memory_context):
+        """将新记忆系统的检索结果转换为旧格式"""
+        from memory import MemoryRetrievalResult
+        
+        # 将新记忆转换为旧的case格式
+        retrieved_cases = []
+        similarity_scores = []
+        
+        for i, memory in enumerate(new_result.retrieved_memories):
+            # 构建case对象
+            case = {
+                'id': memory.id,
+                'problem_description': memory.content,
+                'solution': '',
+                'success_score': memory.success_score,
+                'timestamp': memory.timestamp.isoformat() if hasattr(memory.timestamp, 'isoformat') else str(memory.timestamp),
+                'knowledge_points': getattr(memory, 'knowledge_points', []),
+            }
+            
+            # 根据记忆类型添加不同的信息
+            if hasattr(memory, 'score'):
+                case['solution'] = f"得分: {memory.score:.1f}分"
+                if hasattr(memory, 'reflection'):
+                    case['solution'] += f"\n反思: {memory.reflection[:100]}..."
+            elif hasattr(memory, 'evaluation_content'):
+                case['solution'] = f"评价经验: {memory.evaluation_content[:100]}..."
+            elif hasattr(memory, 'received_evaluation'):
+                case['solution'] = f"收到反馈: {memory.received_evaluation[:100]}..."
+            
+            retrieved_cases.append(case)
+            
+            # 获取相似度分数（从priority_scores中获取）
+            if i < len(new_result.priority_scores):
+                similarity_scores.append(new_result.priority_scores[i].retrieval_probability)
+            else:
+                similarity_scores.append(0.5)
+        
+        # 计算置信度
+        if similarity_scores:
+            confidence_level = sum(similarity_scores) / len(similarity_scores)
+        else:
+            confidence_level = 0.0
+        
+        # 生成解释文本
+        if retrieved_cases:
+            explanation = f"从新记忆系统检索到 {len(retrieved_cases)} 条相关记忆，"
+            explanation += f"包含 {new_result.dimensions_retrieved} 个维度的经验。"
+        else:
+            explanation = "未找到相关的历史记忆。"
+        
+        # 创建旧格式的检索结果
+        return MemoryRetrievalResult(
+            retrieved_cases=retrieved_cases,
+            similarity_scores=similarity_scores,
+            retrieval_time_ms=0.0,  # 添加缺失字段
+            confidence_level=confidence_level,
+            explanation=explanation
+        )
+    
     def _get_default_self_score(self, dimension: str) -> int:
         """根据学生类型获取默认自评分数"""
         import random
@@ -845,7 +1102,16 @@ class StudentAgent:
             logging.error(f"存储到新记忆系统失败: {e}")
     
     def _calculate_memory_importance(self, assignment: Assignment, learning_outcome: LearningOutcome) -> float:
-        """计算记忆重要性"""
+        """
+        计算学习记忆重要性（分段累加）
+        
+        范围: 0.5 ~ 1.0
+        - 基础值: 0.5
+        - 分数加成: +0.1~0.3
+        - 新概念加成: +0.2
+        - 难度加成: +0.1
+        - 突破事件加成: +0.15
+        """
         importance = 0.5  # 基础重要性
         
         # 分数高增加重要性
@@ -863,6 +1129,10 @@ class StudentAgent:
         # 难度高的作业重要性高
         if hasattr(assignment, 'difficulty_level') and assignment.difficulty_level > 0.7:
             importance += 0.1
+        
+        # 突破事件增加重要性（新增）
+        if hasattr(learning_outcome, 'is_breakthrough') and learning_outcome.is_breakthrough:
+            importance += 0.15
         
         return min(1.0, importance)
     
@@ -925,6 +1195,22 @@ class StudentAgent:
                 self._store_peer_evaluation_memory(
                     peer_work, assignment, evaluation_data
                 )
+            
+            # 【新增】更新互评次数
+            self.performance_metrics['total_evaluations'] += 1
+            
+            # 【新增】评价他人后，使用评价质量作为反馈
+            # 评价质量基于评价的详细程度
+            eval_quality = 0.6  # 基础质量
+            if evaluation_data.get('strengths') and len(evaluation_data['strengths']) > 1:
+                eval_quality += 0.1
+            if evaluation_data.get('weaknesses') and len(evaluation_data['weaknesses']) > 1:
+                eval_quality += 0.1
+            if evaluation_data.get('suggestions') and len(evaluation_data['suggestions']) > 0:
+                eval_quality += 0.2
+            
+            # 注意：这里不更新assignment_score，因为这不是自己的作业
+            # 只记录评价活动提升了元认知能力
             
             return evaluation_data
             
@@ -1001,6 +1287,26 @@ class StudentAgent:
             if evaluation_data["strengths"]:
                 learning_points.extend([f"学到了{s}" for s in evaluation_data["strengths"][:2]])
             
+            # 计算importance（基于评价质量）
+            importance = 0.5  # 基础重要性
+            
+            # 评价丰富度
+            strength_count = len(evaluation_data.get("strengths", []))
+            weakness_count = len(evaluation_data.get("weaknesses", []))
+            
+            if strength_count >= 2:
+                importance += 0.1
+            if weakness_count >= 2:
+                importance += 0.1
+            if evaluation_data.get("suggestions") and len(evaluation_data["suggestions"]) >= 1:
+                importance += 0.15
+            
+            # 学习收获
+            if len(learning_points) > 0:
+                importance += 0.15
+            
+            importance = min(1.0, importance)
+            
             peer_eval_memory = PeerEvaluationMemory(
                 id=f"mem_eval_{peer_work.id}_{self.student.id}_{uuid.uuid4().hex[:8]}",
                 content=f"评价了{peer_work.student_id}在{assignment.title}作业中的表现",
@@ -1013,11 +1319,11 @@ class StudentAgent:
                 observed_weaknesses=evaluation_data["weaknesses"],
                 learning_from_peer=learning_points,
                 self_reflection=f"通过评价他人，反思自己在{', '.join(assignment.knowledge_points_covered[:2])}方面的掌握程度",
-                importance=0.6 + (0.1 if len(learning_points) > 0 else 0)
+                importance=importance
             )
             
             self.new_memory_system.add_memory(peer_eval_memory)
-            logging.info(f"评价记忆已添加: {peer_eval_memory.id}")
+            logging.info(f"评价记忆已添加: {peer_eval_memory.id}, importance={importance:.2f}")
             
         except Exception as e:
             logging.error(f"存储评价记忆失败: {e}")
@@ -1044,6 +1350,26 @@ class StudentAgent:
             
             # 存储被评价记忆
             if self.use_new_memory:
+                # 计算importance（基于建设性和认同度）
+                importance = 0.6  # 基础值（收到评价本身就重要）
+                
+                # 建设性（已有数据）
+                insight_count = len(insights)
+                improvement_count = len(improvements)
+                
+                if insight_count >= 2:
+                    importance += 0.1
+                if improvement_count >= 2:
+                    importance += 0.15
+                
+                # 认同度（已有数据）
+                if agreement >= 0.7:
+                    importance += 0.1
+                elif agreement <= 0.3:
+                    importance -= 0.05  # 低认同度降权
+                
+                importance = min(1.0, max(0.3, importance))  # 限制范围 [0.3, 1.0]
+                
                 received_memory = ReceivedEvaluationMemory(
                     id=f"mem_received_{my_work.id}_{evaluator_id}_{uuid.uuid4().hex[:8]}",
                     content=f"收到了{evaluator_id}对我{assignment.title}作业的评价",
@@ -1056,11 +1382,11 @@ class StudentAgent:
                     insights_gained=insights,
                     improvement_actions=improvements,
                     reflection_on_feedback=self._reflect_on_feedback(evaluation_data, agreement),
-                    importance=0.7 + (0.2 if len(improvements) > 0 else 0)
+                    importance=importance
                 )
                 
                 self.new_memory_system.add_memory(received_memory)
-                logging.info(f"被评价记忆已添加: {received_memory.id}")
+                logging.info(f"被评价记忆已添加: {received_memory.id}, importance={importance:.2f}, agreement={agreement:.2f}")
                 
         except Exception as e:
             logging.error(f"处理收到的评价失败: {e}")

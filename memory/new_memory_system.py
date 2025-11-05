@@ -43,7 +43,7 @@ class TemperatureBasedMemoryRetrieval:
         self,
         student_id: str,
         config: Optional[MemoryRetrievalConfig] = None,
-        use_semantic: bool = True
+        use_semantic: bool = True  # 恢复默认启用语义检索
     ):
         self.student_id = student_id
         self.config = config or MemoryRetrievalConfig()
@@ -190,14 +190,13 @@ class TemperatureBasedMemoryRetrieval:
             # 计算相似度
             scores = []
             for memory in memories:
-                if memory.embedding is None:
-                    # 动态编码记忆内容
-                    memory.embedding = self.semantic_encoder.encode(memory.content).tolist()
+                # 动态编码记忆内容（不再持久化到模型中）
+                memory_embedding = self.semantic_encoder.encode(memory.content)
                 
                 # 余弦相似度
                 similarity = self._cosine_similarity(
                     query_embedding,
-                    np.array(memory.embedding)
+                    memory_embedding
                 )
                 scores.append(max(0.0, similarity))  # 确保非负
             
