@@ -80,14 +80,16 @@ class Config:
     MEMORY_WEIGHT_SUCCESS = float(os.getenv("MEMORY_WEIGHT_SUCCESS", 0.1))
     
     # 学生类型配置
+    # score_bias: 评分偏差，影响给同学打分的倾向（-0.2到0.2表示-20到+20分的偏差）
+    # strictness: 严格程度，影响评价的严格度
     STUDENT_TYPES = {
-        "excellent": {"ratio": 0.13, "score_bias": 0.1, "strictness": 0.8},
-        "good": {"ratio": 0.22, "score_bias": 0.05, "strictness": 0.7},
-        "average": {"ratio": 0.32, "score_bias": 0.0, "strictness": 0.6},
-        "below_average": {"ratio": 0.13, "score_bias": -0.05, "strictness": 0.5},
-        "strict": {"ratio": 0.05, "score_bias": -0.1, "strictness": 0.9},
-        "lenient": {"ratio": 0.05, "score_bias": 0.15, "strictness": 0.3},
-        "perfunctory": {"ratio": 0.10, "score_bias": 0.05, "strictness": 0.2}
+        "excellent": {"ratio": 0.13, "score_bias": 0.05, "strictness": 0.8},   # 优秀学生：客观，稍微严格
+        "good": {"ratio": 0.22, "score_bias": 0.02, "strictness": 0.7},        # 良好学生：较客观
+        "average": {"ratio": 0.32, "score_bias": 0.0, "strictness": 0.6},      # 普通学生：中性
+        "below_average": {"ratio": 0.13, "score_bias": -0.03, "strictness": 0.5},  # 基础较差：稍微严格（因为看不懂）
+        "strict": {"ratio": 0.05, "score_bias": -0.15, "strictness": 0.9},     # 严格型：给分很低
+        "lenient": {"ratio": 0.05, "score_bias": 0.15, "strictness": 0.3},     # 宽松型：给分很高
+        "perfunctory": {"ratio": 0.10, "score_bias": 0.0, "strictness": 0.2}   # 敷衍型：随意给分
     }
     
     @classmethod

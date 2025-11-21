@@ -31,38 +31,22 @@ import os
 
 @dataclass
 class LearningContext:
-    """学习情境特征"""
-    # 任务特征
-    task_difficulty: float  # 0-1，任务难度
-    task_novelty: float     # 0-1，任务新颖度（是否涉及新知识）
-    
+    """学习情境特征（简化版）"""
     # 学生状态
     current_mastery: float  # 0-1，当前知识掌握度
-    recent_performance: float  # 0-1，最近表现（最近3次作业平均分）
     metacognition_level: float  # 0-1，元认知水平
     
     # 记忆状态
     stm_size: int          # 短期记忆数量
     ltm_size: int          # 长期记忆数量
-    avg_memory_age: float  # 平均记忆年龄（轮次）
-    
-    # 互评状态
-    evaluation_round: int  # 当前轮次
-    total_evaluations: int # 总评价次数
     
     def to_feature_vector(self) -> np.ndarray:
         """转换为特征向量（归一化）"""
         features = [
-            self.task_difficulty,
-            self.task_novelty,
             self.current_mastery,
-            self.recent_performance,
             self.metacognition_level,
             min(self.stm_size / 50.0, 1.0),  # 归一化到0-1
-            min(self.ltm_size / 200.0, 1.0),
-            min(self.avg_memory_age / 20.0, 1.0),  # 假设最大20轮
-            min(self.evaluation_round / 20.0, 1.0),
-            min(self.total_evaluations / 100.0, 1.0)
+            min(self.ltm_size / 200.0, 1.0)
         ]
         return np.array(features, dtype=np.float32)
 
@@ -83,10 +67,10 @@ class PerformanceFeedback:
 class SimpleWeightNetwork:
     """简单的权重调节网络（2层MLP）"""
     
-    def __init__(self, input_dim: int = 10, hidden_dim: int = 16):
+    def __init__(self, input_dim: int = 4, hidden_dim: int = 8):
         """
         Args:
-            input_dim: 输入特征维度
+            input_dim: 输入特征维度（默认4：掌握度、元认知、STM大小、LTM大小）
             hidden_dim: 隐藏层维度
         """
         self.input_dim = input_dim
@@ -296,9 +280,9 @@ class MetacognitiveRegulator:
         self.last_weights = adjusted_weights
         
         logging.info(f"[学生 {self.student_id}] 权重调节:")
-        logging.info(f"  情境: 难度={context.task_difficulty:.2f}, "
-                    f"新颖度={context.task_novelty:.2f}, "
-                    f"掌握度={context.current_mastery:.2f}")
+        logging.info(f"  情境: 掌握度={context.current_mastery:.2f}, "
+                    f"元认知={context.metacognition_level:.2f}, "
+                    f"STM={context.stm_size}, LTM={context.ltm_size}")
         logging.info(f"  权重: relevance={adjusted_weights['relevance']:.3f}, "
                     f"recency={adjusted_weights['recency']:.3f}, "
                     f"importance={adjusted_weights['importance']:.3f}, "
@@ -406,34 +390,29 @@ def create_regulator_for_student(student_id: str) -> MetacognitiveRegulator:
 
 def regulate_memory_weights(
     regulator: MetacognitiveRegulator,
-    task_difficulty: float,
-    task_novelty: float,
     current_mastery: float,
-    recent_performance: float,
     metacognition_level: float,
     stm_size: int,
-    ltm_size: int,
-    avg_memory_age: float,
-    evaluation_round: int,
-    total_evaluations: int
+    ltm_size: int
 ) -> Dict[str, float]:
     """
-    调节记忆检索权重
+    调节记忆检索权重（简化版）
+    
+    Args:
+        regulator: 元认知调节器
+        current_mastery: 当前知识掌握度 (0-1)
+        metacognition_level: 元认知水平 (0-1)
+        stm_size: 短期记忆数量
+        ltm_size: 长期记忆数量
     
     Returns:
         调节后的权重字典: {'relevance': x, 'recency': y, 'importance': z, 'success': w}
     """
     context = LearningContext(
-        task_difficulty=task_difficulty,
-        task_novelty=task_novelty,
         current_mastery=current_mastery,
-        recent_performance=recent_performance,
         metacognition_level=metacognition_level,
         stm_size=stm_size,
-        ltm_size=ltm_size,
-        avg_memory_age=avg_memory_age,
-        evaluation_round=evaluation_round,
-        total_evaluations=total_evaluations
+        ltm_size=ltm_size
     )
     
     return regulator.regulate(context)
@@ -468,20 +447,14 @@ if __name__ == "__main__":
     
     # 模拟几个学习场景
     scenarios = [
-        # 场景1: 新任务，学生掌握度低
+        # 场景1: 新手学生，记忆较少
         {
-            'name': '新知识学习',
+            'name': '初学者',
             'context': {
-                'task_difficulty': 0.7,
-                'task_novelty': 0.9,
                 'current_mastery': 0.3,
-                'recent_performance': 0.5,
-                'metacognition_level': 0.6,
+                'metacognition_level': 0.5,
                 'stm_size': 10,
-                'ltm_size': 20,
-                'avg_memory_age': 2.0,
-                'evaluation_round': 3,
-                'total_evaluations': 8
+                'ltm_size': 20
             },
             'feedback': {
                 'assignment_score': 0.65,
@@ -489,20 +462,14 @@ if __name__ == "__main__":
                 'learning_gain': 0.15
             }
         },
-        # 场景2: 复习任务，学生掌握度高
+        # 场景2: 高水平学生，记忆丰富
         {
-            'name': '知识巩固',
+            'name': '熟练者',
             'context': {
-                'task_difficulty': 0.4,
-                'task_novelty': 0.2,
                 'current_mastery': 0.8,
-                'recent_performance': 0.85,
-                'metacognition_level': 0.75,
+                'metacognition_level': 0.8,
                 'stm_size': 25,
-                'ltm_size': 80,
-                'avg_memory_age': 8.0,
-                'evaluation_round': 12,
-                'total_evaluations': 35
+                'ltm_size': 80
             },
             'feedback': {
                 'assignment_score': 0.9,
@@ -510,20 +477,14 @@ if __name__ == "__main__":
                 'learning_gain': 0.05
             }
         },
-        # 场景3: 困难任务
+        # 场景3: 中等水平，记忆适中
         {
-            'name': '挑战任务',
+            'name': '进阶者',
             'context': {
-                'task_difficulty': 0.9,
-                'task_novelty': 0.6,
                 'current_mastery': 0.6,
-                'recent_performance': 0.7,
-                'metacognition_level': 0.8,
-                'stm_size': 30,
-                'ltm_size': 120,
-                'avg_memory_age': 10.0,
-                'evaluation_round': 15,
-                'total_evaluations': 50
+                'metacognition_level': 0.7,
+                'stm_size': 18,
+                'ltm_size': 50
             },
             'feedback': {
                 'assignment_score': 0.75,

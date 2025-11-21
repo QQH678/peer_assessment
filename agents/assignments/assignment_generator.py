@@ -36,10 +36,15 @@ class AssignmentGenerator:
         return assignments
     
     def _generate_single_assignment(self) -> Assignment:
-        """生成单个作业"""
+        """生成单个作业（支持多种课程类型）"""
         # 随机选择课程和主题
         subject = random.choice(list(self.subjects.keys()))
         topic = random.choice(self.subjects[subject])
+        
+        # 推断课程类型
+        from config.course_config import get_course_config
+        config = get_course_config()
+        course_type = config.infer_course_type(subject)
         
         # 随机选择作业类型
         assignment_type = random.choice(list(AssignmentType))
@@ -49,7 +54,7 @@ class AssignmentGenerator:
         
         # 使用LLM生成作业详情
         assignment_details = self._generate_assignment_details(
-            subject, topic, assignment_type, difficulty
+            subject, topic, assignment_type, difficulty, course_type
         )
         
         return Assignment(
@@ -58,6 +63,7 @@ class AssignmentGenerator:
             description=assignment_details["description"],
             assignment_type=assignment_type,
             subject=subject,
+            course_type=course_type,  # 添加课程类型
             difficulty_level=difficulty,
             requirements=assignment_details["requirements"],
             evaluation_criteria=assignment_details["evaluation_criteria"],
@@ -66,12 +72,20 @@ class AssignmentGenerator:
     
     def _generate_assignment_details(self, subject: str, topic: str, 
                                    assignment_type: AssignmentType, 
-                                   difficulty: int) -> Dict[str, Any]:
-        """使用LLM生成作业详细内容"""
+                                   difficulty: int,
+                                   course_type: str = "programming") -> Dict[str, Any]:
+        """使用LLM生成作业详细内容（支持多种课程类型）"""
         
-        prompt = f"""请为高校计算机专业课程生成一个作业。
+        # 获取课程类型的评价维度
+        from config.course_config import get_course_config
+        config = get_course_config()
+        dimensions = config.get_dimension_names(course_type)
+        descriptions = config.get_dimension_descriptions(course_type)
+        
+        prompt = f"""请为高校课程生成一个作业。
 
 课程：{subject}
+课程类型：{config.get_course_type_name(course_type)}
 主题：{topic}
 作业类型：{assignment_type.value}
 难度等级：{difficulty}/5 (1=入门，5=高级)
@@ -91,11 +105,13 @@ class AssignmentGenerator:
 ...
 
 === 评价标准 ===
-功能实现: [对功能实现的评价标准]
-代码质量: [对代码质量的评价标准]
-创新性: [对创新性的评价标准]
-文档完整性: [对文档的评价标准]
-
+"""
+        
+        # 添加动态评价维度
+        for dim in dimensions:
+            prompt += f"{dim}: [对{dim}的评价标准，参考：{descriptions[dim]}]\n"
+        
+        prompt += """
 请确保作业内容符合难度等级，并且有一定的实践性和教育意义。
 """
         

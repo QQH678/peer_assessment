@@ -193,7 +193,7 @@ python main.py --experiment semester \
 python main.py --experiment semester \
     --course-name "数据结构与算法" \
     --subject "计算机科学" \
-    --student-count 4 \
+    --student-count 3 \
     --duration-weeks 16 \
     --evaluations-per-work 4 \
     --rounds-per-stage 2 \

@@ -98,6 +98,10 @@ class Assignment(BaseModel):
     description: str
     assignment_type: AssignmentType
     subject: str = Field(description="课程科目")
+    course_type: str = Field(
+        default="programming", 
+        description="课程类型: programming/writing/design/theory/experiment/mathematics/generic"
+    )
     difficulty_level: int = Field(ge=1, le=5, description="难度等级 1-5")
     requirements: List[str] = Field(description="具体要求")
     evaluation_criteria: Dict[str, str] = Field(description="评价标准")
@@ -128,20 +132,45 @@ class StudentWork(BaseModel):
         return safe_to_dict(self)
 
 class EvaluationScore(BaseModel):
-    """评分详情"""
+    """评分详情（编程类 - 保留向后兼容）"""
     functionality: int = Field(ge=0, le=100, description="功能实现分数")
     code_quality: int = Field(ge=0, le=100, description="代码质量分数")
     innovation: int = Field(ge=0, le=100, description="创新性分数")
     documentation: int = Field(ge=0, le=100, description="文档完整性分数")
     
+    # 通用评分字典（支持其他课程类型）
+    dimension_scores: Optional[Dict[str, int]] = Field(
+        default=None,
+        description="通用评分维度: {维度key: 分数}"
+    )
+    
     def get_weighted_score(self, weights: Dict[str, float]) -> float:
         """计算加权总分"""
+        # 如果有通用维度分数，优先使用
+        if self.dimension_scores:
+            total = 0.0
+            for key, score in self.dimension_scores.items():
+                total += score * weights.get(key, 1.0 / len(self.dimension_scores))
+            return total
+        
+        # 否则使用编程类的固定维度
         return (
             self.functionality * weights.get("functionality", 0.4) +
             self.code_quality * weights.get("code_quality", 0.3) +
             self.innovation * weights.get("innovation", 0.15) +
             self.documentation * weights.get("documentation", 0.15)
         )
+    
+    def to_dict_generic(self) -> Dict[str, int]:
+        """转换为通用字典格式"""
+        if self.dimension_scores:
+            return self.dimension_scores
+        return {
+            "functionality": self.functionality,
+            "code_quality": self.code_quality,
+            "innovation": self.innovation,
+            "documentation": self.documentation
+        }
 
 class PeerEvaluation(BaseModel):
     """同伴互评模型"""

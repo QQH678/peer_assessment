@@ -31,19 +31,33 @@ class KnowledgeStateAnalysis(BaseModel):
 
 
 class MetacognitionAssessment(BaseModel):
-    """元认知能力评估"""
+    """
+    元认知能力评估
+    基于 Zimmerman (2000) 自我调节学习 (SRL) 三阶段模型
+    """
     student_id: str
     round_id: str
     timestamp: datetime = Field(default_factory=datetime.now)
     
-    # 元认知分数
+    # 元认知总分
     overall_score: float = Field(ge=0.0, le=1.0, description="总体元认知水平[0-1]")
     
-    # 分项能力
-    self_awareness: float = Field(ge=0.0, le=1.0, description="自我认知准确度")
-    evaluation_ability: float = Field(ge=0.0, le=1.0, description="评价他人能力")
-    reflection_quality: float = Field(ge=0.0, le=1.0, description="反思质量")
-    learning_strategy: float = Field(ge=0.0, le=1.0, description="学习策略有效性")
+    # === Zimmerman SRL 三阶段 ===
+    
+    # 阶段1: 前导 (Forethought) - 任务前的准备
+    forethought_phase: float = Field(ge=0.0, le=1.0, description="前导阶段得分")
+    goal_setting: float = Field(ge=0.0, le=1.0, description="目标设定能力")
+    strategic_planning: float = Field(ge=0.0, le=1.0, description="策略规划能力")
+    
+    # 阶段2: 执行 (Performance) - 任务执行过程
+    performance_phase: float = Field(ge=0.0, le=1.0, description="执行阶段得分")
+    self_monitoring: float = Field(ge=0.0, le=1.0, description="自我监控能力")
+    attention_control: float = Field(ge=0.0, le=1.0, description="注意控制能力")
+    
+    # 阶段3: 反思 (Self-reflection) - 任务后的反思
+    reflection_phase: float = Field(ge=0.0, le=1.0, description="反思阶段得分")
+    self_evaluation: float = Field(ge=0.0, le=1.0, description="自我评价能力")
+    causal_attribution: float = Field(ge=0.0, le=1.0, description="归因能力")
     
     # 观察和建议
     observations: List[str] = Field(default_factory=list)
@@ -337,7 +351,7 @@ class TeacherAnalyzer:
             for i, ev in enumerate(evaluations_received[:3])
         ]) if evaluations_received else "未收到评价"
         
-        prompt = f"""作为教育心理学专家，评估学生的元认知能力。
+        prompt = f"""作为教育心理学专家，基于 Zimmerman (2000) 自我调节学习 (SRL) 三阶段模型评估学生的元认知能力。
 
 学生给出的评价：
 {eval_given_summary}
@@ -348,20 +362,53 @@ class TeacherAnalyzer:
 学生反思：
 {getattr(student_work, 'reflection', '无反思')}
 
-请从以下维度评估（0-1分）：
-1. self_awareness: 自我认知的准确度
-2. evaluation_ability: 评价他人的能力
-3. reflection_quality: 反思的质量
-4. learning_strategy: 学习策略的有效性
+作业得分：{self.safe_get(student_work, 'score', 0)}
 
-返回JSON：
+请按 Zimmerman SRL 三阶段评估（每项0-1分）：
+
+【阶段1：前导 (Forethought)】- 任务前的准备
+- goal_setting: 目标设定 - 是否有明确的学习目标？（从反思/计划中推断）
+  * 低水平：模糊目标 "我要完成任务"
+  * 中等：有具体任务目标 "明确步骤"
+  * 高水平：有学习目标+策略目标 "掌握知识+时间规划"
+  
+- strategic_planning: 策略规划 - 是否规划了学习策略？
+  * 低水平：简单步骤 "先看后写"
+  * 中等：明确策略 "查资料、写作"
+  * 高水平：策略+时间+资源规划 "分阶段+资源规划"
+
+【阶段2：执行 (Performance)】- 任务执行过程
+- self_monitoring: 自我监控 - 执行中是否监控自己的表现？
+  * 低水平：被动困惑 "不太理解"
+  * 中等：主动识别问题与检查 "发现问题+检查"
+  * 高水平：动态监控+中途调整 "持续检查+策略调整"
+  
+- attention_control: 注意控制 - 是否专注于关键内容？
+  * 低水平：被动集中 "必须完成"
+  * 中等：关注重点内容 "专注关键"
+  * 高水平：有选择性注意+中途调整 "抓重点+忽略干扰"
+
+【阶段3：反思 (Self-reflection)】- 任务后的反思
+- self_evaluation: 自我评价 - 反思质量如何？
+  * 低水平：模糊评价 "还可以"
+  * 中等：具体分析优劣 "批判性分析+改进计划"
+  * 高水平：批判性分析+改进计划 "深度分析+具体计划"
+  
+- causal_attribution: 归因 - 如何解释成败原因？
+  * 低水平：外部归因 "因为找投资问题"
+  * 中等：部分自我归因 "部分归因努力"
+  * 高水平：成熟归因模式 "策略归因+可控归因"
+
+返回JSON（根据学生实际表现评分，不要给假数据）：
 {{
-    "self_awareness": 0.7,
-    "evaluation_ability": 0.8,
-    "reflection_quality": 0.6,
-    "learning_strategy": 0.7,
-    "observations": ["观察1", "观察2"],
-    "improvement_suggestions": ["建议1", "建议2"]
+    "goal_setting": 0.7,
+    "strategic_planning": 0.6,
+    "self_monitoring": 0.8,
+    "attention_control": 0.7,
+    "self_evaluation": 0.75,
+    "causal_attribution": 0.65,
+    "observations": ["观察1：具体描述学生的SRL表现", "观察2"],
+    "improvement_suggestions": ["建议1：针对性改进建议", "建议2"]
 }}
 """
         
@@ -384,21 +431,20 @@ class TeacherAnalyzer:
             
             data = json.loads(content.strip())
             
-            # 计算总分
-            overall = (
-                data["self_awareness"] + 
-                data["evaluation_ability"] + 
-                data["reflection_quality"] + 
-                data["learning_strategy"]
-            ) / 4.0
+            # 计算三阶段得分
+            forethought = (data["goal_setting"] + data["strategic_planning"]) / 2.0
+            performance = (data["self_monitoring"] + data["attention_control"]) / 2.0
+            reflection = (data["self_evaluation"] + data["causal_attribution"]) / 2.0
+            
+            # 计算总分（三阶段平均）
+            overall = (forethought + performance + reflection) / 3.0
             
             # 异常检测：元认知分数异常低
             if overall < 0.25:
                 logging.warning(f"⚠️ 学生 {student_id} 轮次 {round_id} 元认知分数异常低: {overall:.3f}")
-                logging.debug(f"   - 自我认知: {data['self_awareness']:.3f}")
-                logging.debug(f"   - 评价能力: {data['evaluation_ability']:.3f}")
-                logging.debug(f"   - 反思质量: {data['reflection_quality']:.3f}")
-                logging.debug(f"   - 学习策略: {data['learning_strategy']:.3f}")
+                logging.debug(f"   - 前导阶段: {forethought:.3f} (目标={data['goal_setting']:.3f}, 规划={data['strategic_planning']:.3f})")
+                logging.debug(f"   - 执行阶段: {performance:.3f} (监控={data['self_monitoring']:.3f}, 注意={data['attention_control']:.3f})")
+                logging.debug(f"   - 反思阶段: {reflection:.3f} (评价={data['self_evaluation']:.3f}, 归因={data['causal_attribution']:.3f})")
                 logging.debug(f"   - 给出评价数: {len(evaluations_given)}")
                 logging.debug(f"   - 收到评价数: {len(evaluations_received)}")
             
@@ -406,10 +452,17 @@ class TeacherAnalyzer:
                 student_id=student_id,
                 round_id=round_id,
                 overall_score=overall,
-                self_awareness=data["self_awareness"],
-                evaluation_ability=data["evaluation_ability"],
-                reflection_quality=data["reflection_quality"],
-                learning_strategy=data["learning_strategy"],
+                # 三阶段得分
+                forethought_phase=forethought,
+                performance_phase=performance,
+                reflection_phase=reflection,
+                # 六个细分维度
+                goal_setting=data["goal_setting"],
+                strategic_planning=data["strategic_planning"],
+                self_monitoring=data["self_monitoring"],
+                attention_control=data["attention_control"],
+                self_evaluation=data["self_evaluation"],
+                causal_attribution=data["causal_attribution"],
                 observations=data.get("observations", []),
                 improvement_suggestions=data.get("improvement_suggestions", [])
             )
@@ -420,10 +473,15 @@ class TeacherAnalyzer:
                 student_id=student_id,
                 round_id=round_id,
                 overall_score=0.5,
-                self_awareness=0.5,
-                evaluation_ability=0.5,
-                reflection_quality=0.5,
-                learning_strategy=0.5
+                forethought_phase=0.5,
+                performance_phase=0.5,
+                reflection_phase=0.5,
+                goal_setting=0.5,
+                strategic_planning=0.5,
+                self_monitoring=0.5,
+                attention_control=0.5,
+                self_evaluation=0.5,
+                causal_attribution=0.5
             )
     
     def _assess_evaluation_quality(

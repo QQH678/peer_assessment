@@ -144,7 +144,7 @@ class StudentAgent:
         response = self.client.chat.completions.create(
             model=Config.DEFAULT_MODEL,
             messages=[
-                {"role": "system", "content": self._get_enhanced_system_prompt()},
+                {"role": "system", "content": self._get_enhanced_system_prompt(assignment)},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7
@@ -440,23 +440,7 @@ class StudentAgent:
         """
         from tools.metacognitive_regulator import regulate_memory_weights
         
-        # 1. 估计任务难度（基于描述长度和难度等级）
-        task_difficulty = assignment.difficulty_level / 5.0 if hasattr(assignment, 'difficulty_level') else 0.5
-        if hasattr(assignment, 'description'):
-            # 描述越长，任务越复杂
-            desc_length_factor = min(1.0, len(assignment.description) / 500.0)
-            task_difficulty = (task_difficulty + desc_length_factor) / 2.0
-        
-        # 2. 估计任务新颖度（基于知识点）
-        if course and hasattr(assignment, 'knowledge_points_covered') and assignment.knowledge_points_covered:
-            known_kps = set(self.student.knowledge_mastery.keys())
-            required_kps = set(assignment.knowledge_points_covered)
-            new_kps = required_kps - known_kps
-            task_novelty = len(new_kps) / max(1, len(required_kps))
-        else:
-            task_novelty = 0.5  # 默认中等新颖度
-        
-        # 3. 当前掌握度（基于知识点平均掌握度）
+        # 1. 当前掌握度（基于知识点平均掌握度）
         if hasattr(assignment, 'knowledge_points_covered') and assignment.knowledge_points_covered:
             mastery_scores = [
                 self.student.knowledge_mastery.get(kp_id, 0.5)
@@ -466,11 +450,7 @@ class StudentAgent:
         else:
             current_mastery = 0.5
         
-        # 4. 最近表现（最近3次作业平均分）
-        recent_scores = self.performance_metrics.get('recent_scores', [])[-3:]
-        recent_performance = sum(recent_scores) / len(recent_scores) if recent_scores else 0.5
-        
-        # 5. 元认知水平（从新记忆系统获取或使用默认值）
+        # 2. 元认知水平（从新记忆系统获取或使用默认值）
         if hasattr(self.new_memory_system, 'memory_state') and hasattr(self.new_memory_system.memory_state, 'metacognition_history'):
             meta_history = self.new_memory_system.memory_state.metacognition_history
             if meta_history:
@@ -480,31 +460,17 @@ class StudentAgent:
         else:
             metacognition_level = 0.7
         
-        # 6. 记忆状态
+        # 3. 记忆状态
         stm_size = len(self.new_memory_system.stm) if hasattr(self.new_memory_system, 'stm') else 0
         ltm_size = len(self.new_memory_system.ltm) if hasattr(self.new_memory_system, 'ltm') else 0
         
-        # 7. 计算平均记忆年龄
-        current_round = self.performance_metrics.get('current_round', 1)
-        avg_memory_age = self._calculate_avg_memory_age(current_round)
-        
-        # 8. 互评状态
-        evaluation_round = current_round
-        total_evaluations = self.performance_metrics.get('total_evaluations', 0)
-        
-        # 调用元认知调节器
+        # 调用元认知调节器（使用简化的参数列表）
         adjusted_weights = regulate_memory_weights(
             regulator=self.metacognitive_regulator,
-            task_difficulty=task_difficulty,
-            task_novelty=task_novelty,
             current_mastery=current_mastery,
-            recent_performance=recent_performance,
             metacognition_level=metacognition_level,
             stm_size=stm_size,
-            ltm_size=ltm_size,
-            avg_memory_age=avg_memory_age,
-            evaluation_round=evaluation_round,
-            total_evaluations=total_evaluations
+            ltm_size=ltm_size
         )
         
         # 应用调节后的权重到记忆检索配置
@@ -684,9 +650,9 @@ class StudentAgent:
         if len(self.student.performance_history) > 20:
             self.student.performance_history = self.student.performance_history[-20:]
     
-    def _get_enhanced_system_prompt(self) -> str:
+    def _get_enhanced_system_prompt(self, assignment: Assignment = None) -> str:
         """获取增强的学生角色系统提示词"""
-        basic_prompt = self._get_student_system_prompt()
+        basic_prompt = self._get_student_system_prompt(assignment)
         
         enhancement = """
 你现在具备了智能记忆系统，可以：
@@ -819,46 +785,48 @@ class StudentAgent:
             self.student.performance_history = self.student.performance_history[-20:]
     
     def _estimate_assignment_performance(self, work: StudentWork, assignment: Assignment) -> float:
-        """估算作业表现水平 - 改进版，考虑学习进步和记忆效果"""
-        # 提高基准表现，增加成功可能性
-        base_performance = 0.72  # 提高基准表现，增加成功可能性
+        """估算作业表现水平 - 改进版，考虑学习进步和记忆效果，提高整体分数分布"""
+        # 提高基准表现，让优秀学生有机会得到高分
+        base_performance = 0.75  # 从0.72提高到0.75
         
-        # 根据学生类型调整 - 更合理的分布
+        # 根据学生类型调整 - 拉大差距，让优秀学生更容易得高分
         type_multipliers = {
-            "excellent": 1.25,
-            "good": 1.15,
-            "average": 1.0,
-            "below_average": 0.85,  # 提高低水平学生表现
-            "strict": 1.05,
-            "lenient": 0.95,
-            "perfunctory": 0.8
+            "excellent": 1.33,      # 优秀: 0.75 * 1.33 ≈ 1.0 (100分)
+            "good": 1.20,           # 良好: 0.75 * 1.20 ≈ 0.9 (90分)
+            "average": 1.07,        # 普通: 0.75 * 1.07 ≈ 0.8 (80分)
+            "below_average": 0.93,  # 较差: 0.75 * 0.93 ≈ 0.7 (70分)
+            "strict": 1.13,         # 严格: 0.75 * 1.13 ≈ 0.85 (85分)
+            "lenient": 1.07,        # 宽松: 0.75 * 1.07 ≈ 0.8 (80分)
+            "perfunctory": 0.80     # 敷衍: 0.75 * 0.80 ≈ 0.6 (60分)
         }
         
-        performance = base_performance * type_multipliers.get(self.student.student_type.value, 0.9)
+        performance = base_performance * type_multipliers.get(self.student.student_type.value, 1.0)
         
         # 考虑学习经验积累 - 渐进式改善
         assignments_completed = getattr(self.performance_metrics, 'assignments_completed', 0)
-        learning_boost = min(0.15, assignments_completed * 0.03)  # 最多15%的提升
+        learning_boost = min(0.12, assignments_completed * 0.025)  # 最多12%的提升
         performance += learning_boost
         
         # 根据记忆系统使用情况调整
         if hasattr(self.memory_system, 'case_library') and len(self.memory_system.case_library.cases) > 0:
-            memory_boost = min(0.1, len(self.memory_system.case_library.cases) * 0.02)
+            memory_boost = min(0.08, len(self.memory_system.case_library.cases) * 0.015)
             performance += memory_boost
         
-        # 根据作业难度调整 - 更平滑的难度曲线
-        difficulty_factor = max(0.6, 1.2 - 0.1 * assignment.difficulty_level)  # 减少难度惩罚
+        # 根据作业难度调整 - 更平滑的难度曲线，减少惩罚
+        # 难度1: 1.15倍, 难度3: 1.0倍, 难度5: 0.85倍
+        difficulty_factor = max(0.85, 1.25 - 0.08 * assignment.difficulty_level)
         performance *= difficulty_factor
         
-        # 减少随机性，增加稳定性
-        performance *= random.uniform(0.9, 1.15)
+        # 添加适度随机性
+        performance *= random.uniform(0.92, 1.08)
         
-        return min(1.0, max(0.2, performance))
+        # 确保分数在合理范围内，允许优秀学生达到满分
+        return min(1.0, max(0.4, performance))
     
     
-    def _get_student_system_prompt(self) -> str:
-        """获取学生角色的系统提示词"""
-        return f"""你是一名{self.student.major}专业的{self.student.academic_level}学生，名字叫{self.student.name}。
+    def _get_student_system_prompt(self, assignment: Assignment = None) -> str:
+        """获取学生角色的系统提示词（支持多种课程类型）"""
+        base_prompt = f"""你是一名{self.student.major}专业的{self.student.academic_level}学生，名字叫{self.student.name}。
 
 学生特征：
 - 学生类型：{self.student.student_type.value}
@@ -870,7 +838,7 @@ class StudentAgent:
 
 作业完成后，请按以下格式输出：
 === 作业内容 ===
-[这里是你的作业内容，包括代码、设计等]
+[这里是你的作业内容]
 
 === 文档说明 ===
 [这里是你对作业的说明文档]
@@ -879,11 +847,25 @@ class StudentAgent:
 [完成这个作业大概花费的小时数]
 
 === 自我评估 ===
-功能实现: [0-100分]
+"""
+        
+        # 动态添加评价维度
+        if assignment:
+            from config.course_config import get_course_config
+            config = get_course_config()
+            course_type = getattr(assignment, 'course_type', None) or config.infer_course_type(assignment.subject)
+            dimensions = config.get_dimension_names(course_type)
+            for dim in dimensions:
+                base_prompt += f"{dim}: [0-100分]\n"
+        else:
+            # 默认使用编程类维度
+            base_prompt += """功能实现: [0-100分]
 代码质量: [0-100分] 
 创新性: [0-100分]
 文档完整性: [0-100分]
 """
+        
+        return base_prompt
     
     def _build_assignment_prompt(self, assignment: Assignment) -> str:
         """构建作业提示词"""
@@ -914,8 +896,8 @@ class StudentAgent:
         # 解析响应内容
         sections = self._parse_response(content)
         
-        # 生成自我评估
-        self_assessment = self._generate_self_assessment(sections.get("自我评估", ""))
+        # 生成自我评估（传递assignment参数）
+        self_assessment = self._generate_self_assessment(sections.get("自我评估", ""), assignment)
         
         return StudentWork(
             id=str(uuid.uuid4()),
@@ -972,14 +954,22 @@ class StudentAgent:
         else:
             return 4
     
-    def _generate_self_assessment(self, assessment_text: str) -> Dict[str, int]:
-        """生成自我评估分数"""
+    def _generate_self_assessment(self, assessment_text: str, assignment: Assignment = None) -> Dict[str, int]:
+        """生成自我评估分数（支持多种课程类型）"""
         import re
+        
+        # 动态获取评价维度
+        if assignment:
+            from config.course_config import get_course_config
+            config = get_course_config()
+            course_type = getattr(assignment, 'course_type', None) or config.infer_course_type(assignment.subject)
+            dimensions = config.get_dimension_names(course_type)
+        else:
+            # 如果没有assignment信息，使用默认编程类维度
+            dimensions = ["功能实现", "代码质量", "创新性", "文档完整性"]
         
         # 尝试从文本中解析分数
         scores = {}
-        dimensions = ["功能实现", "代码质量", "创新性", "文档完整性"]
-        
         for dim in dimensions:
             pattern = f"{dim}[：:]\\s*(\\d+)"
             match = re.search(pattern, assessment_text)
@@ -1137,25 +1127,35 @@ class StudentAgent:
         return min(1.0, importance)
     
     def evaluate_peer_work(self, peer_work: StudentWork, assignment: Assignment) -> Dict[str, Any]:
-        """评价同伴作业"""
+        """评价同伴作业（支持多种课程类型）"""
         logging.info(f"学生 {self.student.name} 开始评价 {peer_work.student_id} 的作业")
+        
+        # 动态获取评价维度
+        from config.course_config import get_course_config
+        config = get_course_config()
+        
+        # 获取课程类型（优先使用assignment的course_type，否则推断）
+        course_type = getattr(assignment, 'course_type', None) or config.infer_course_type(assignment.subject)
+        dimensions = config.get_dimension_names(course_type)
+        descriptions = config.get_dimension_descriptions(course_type)
         
         # 构建评价提示词
         prompt = f"""你是一名{self.student.student_type.value}类型的学生，现在需要评价同伴的作业。
 
 作业题目：{assignment.title}
 作业描述：{assignment.description}
-涉及知识点：{', '.join(assignment.knowledge_points_covered)}
+课程类型：{config.get_course_type_name(course_type)}
+涉及知识点：{', '.join(assignment.knowledge_points_covered) if assignment.knowledge_points_covered else '无'}
 
 同伴的作业内容：
 {peer_work.content[:1000]}...
 
 请从以下几个方面评价：
-1. 功能实现（是否满足要求）
-2. 代码质量（可读性、结构）
-3. 创新性（是否有独特见解）
-4. 文档完整性（注释、说明）
-
+"""
+        for i, dim in enumerate(dimensions, 1):
+            prompt += f"{i}. {dim}（{descriptions[dim]}）\n"
+        
+        prompt += """
 请给出具体评价和建议，并打分（0-100分）。
 返回格式：
 评价内容：
