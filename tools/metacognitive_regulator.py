@@ -343,28 +343,28 @@ class MetacognitiveRegulator:
             'total_updates': len(self.feedback_history),
             'weight_statistics': {
                 'relevance': {
-                    'mean': float(np.mean(relevance_vals)),
-                    'std': float(np.std(relevance_vals)),
-                    'min': float(np.min(relevance_vals)),
-                    'max': float(np.max(relevance_vals))
+                    'mean': float(np.mean(relevance_vals)) if len(relevance_vals) > 0 else 0.0,
+                    'std': float(np.std(relevance_vals)) if len(relevance_vals) > 0 else 0.0,
+                    'min': float(np.min(relevance_vals)) if len(relevance_vals) > 0 else 0.0,
+                    'max': float(np.max(relevance_vals)) if len(relevance_vals) > 0 else 0.0
                 },
                 'recency': {
-                    'mean': float(np.mean(recency_vals)),
-                    'std': float(np.std(recency_vals)),
-                    'min': float(np.min(recency_vals)),
-                    'max': float(np.max(recency_vals))
+                    'mean': float(np.mean(recency_vals)) if len(recency_vals) > 0 else 0.0,
+                    'std': float(np.std(recency_vals)) if len(recency_vals) > 0 else 0.0,
+                    'min': float(np.min(recency_vals)) if len(recency_vals) > 0 else 0.0,
+                    'max': float(np.max(recency_vals)) if len(recency_vals) > 0 else 0.0
                 },
                 'importance': {
-                    'mean': float(np.mean(importance_vals)),
-                    'std': float(np.std(importance_vals)),
-                    'min': float(np.min(importance_vals)),
-                    'max': float(np.max(importance_vals))
+                    'mean': float(np.mean(importance_vals)) if len(importance_vals) > 0 else 0.0,
+                    'std': float(np.std(importance_vals)) if len(importance_vals) > 0 else 0.0,
+                    'min': float(np.min(importance_vals)) if len(importance_vals) > 0 else 0.0,
+                    'max': float(np.max(importance_vals)) if len(importance_vals) > 0 else 0.0
                 },
                 'success': {
-                    'mean': float(np.mean(success_vals)),
-                    'std': float(np.std(success_vals)),
-                    'min': float(np.min(success_vals)),
-                    'max': float(np.max(success_vals))
+                    'mean': float(np.mean(success_vals)) if len(success_vals) > 0 else 0.0,
+                    'std': float(np.std(success_vals)) if len(success_vals) > 0 else 0.0,
+                    'min': float(np.min(success_vals)) if len(success_vals) > 0 else 0.0,
+                    'max': float(np.max(success_vals)) if len(success_vals) > 0 else 0.0
                 }
             }
         }

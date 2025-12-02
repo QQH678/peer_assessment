@@ -1,8 +1,12 @@
 from pydantic import BaseModel, Field
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, TYPE_CHECKING
 from datetime import datetime
 from enum import Enum
 import json
+
+# 延迟导入以避免循环依赖
+if TYPE_CHECKING:
+    from .psychology_models import PsychologyState
 
 class StudentType(str, Enum):
     """学生类型枚举"""
@@ -42,6 +46,9 @@ class Student(BaseModel):
     long_term_memory: Dict[str, Any] = Field(default_factory=dict, description="长期记忆")
     knowledge_mastery: Dict[str, float] = Field(default_factory=dict, description="知识点掌握程度")
     performance_history: List[Dict[str, Any]] = Field(default_factory=list, description="历史表现记录")
+    
+    # 心理状态系统
+    psychology_state: Optional[Dict[str, Any]] = Field(default=None, description="心理状态(情绪、社交、语言风格)")
     
     def to_dict(self) -> Dict[str, Any]:
         return safe_to_dict(self)
@@ -127,6 +134,12 @@ class StudentWork(BaseModel):
     submission_time: datetime
     estimated_effort_hours: int = Field(description="预估花费时间")
     self_assessment: Optional[Dict[str, int]] = Field(description="自我评估")
+    
+    # 作业修订相关字段
+    revision_number: int = Field(default=0, description="修订版本号（0表示初始版本）")
+    original_work_id: Optional[str] = Field(default=None, description="原始作业ID")
+    revision_notes: Optional[str] = Field(default=None, description="修订说明")
+    revision_history: Optional[List[Dict[str, Any]]] = Field(default=None, description="修订历史记录")
     
     def to_dict(self) -> Dict[str, Any]:
         return safe_to_dict(self)

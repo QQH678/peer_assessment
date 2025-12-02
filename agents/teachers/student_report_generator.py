@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 import json
 import logging
 import openai
+import re
 from config.settings import Config
 
 
@@ -101,6 +102,135 @@ class StudentReportGenerator:
             base_url=Config.OPENAI_BASE_URL
         )
         logging.info("学生报告生成器初始化完成")
+    
+    def _clean_and_parse_json(self, content: str, context: str = "JSON解析") -> dict:
+        """
+        健壮的JSON解析方法，处理LLM返回的各种异常格式
+        """
+        if not content:
+            raise ValueError("空内容")
+        
+        original_content = content
+        content = content.strip()
+        
+        # 1. 移除markdown代码块标记
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0]
+        elif "```" in content:
+            parts = content.split("```")
+            if len(parts) >= 2:
+                content = parts[1]
+                if content.strip() and not content.strip()[0] in '{}[]':
+                    lines = content.split('\n', 1)
+                    if len(lines) > 1:
+                        content = lines[1]
+        
+        content = content.strip()
+        
+        # 2. 找到JSON对象的开始和结束
+        start_idx = -1
+        for i, c in enumerate(content):
+            if c in '{}':
+                start_idx = i
+                break
+        
+        if start_idx == -1:
+            raise ValueError(f"未找到JSON开始标记")
+        
+        bracket_type = content[start_idx]
+        close_bracket = '}' if bracket_type == '{' else ']'
+        depth = 0
+        in_string = False
+        escape_next = False
+        end_idx = -1
+        
+        for i in range(start_idx, len(content)):
+            c = content[i]
+            
+            if escape_next:
+                escape_next = False
+                continue
+            
+            if c == '\\':
+                escape_next = True
+                continue
+            
+            if c == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            
+            if in_string:
+                continue
+            
+            if c == bracket_type:
+                depth += 1
+            elif c == close_bracket:
+                depth -= 1
+                if depth == 0:
+                    end_idx = i
+                    break
+        
+        if end_idx == -1:
+            end_idx = content.rfind(close_bracket)
+        
+        if end_idx == -1 or end_idx <= start_idx:
+            raise ValueError(f"未找到完整的JSON对象")
+        
+        json_str = content[start_idx:end_idx+1]
+        
+        # 3. 尝试直接解析
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
+        
+        # 4. 尝试修复常见问题
+        # 4.1 替换单引号为双引号
+        fixed_str = self._fix_json_quotes(json_str)
+        try:
+            return json.loads(fixed_str)
+        except json.JSONDecodeError:
+            pass
+        
+        # 4.2 移除尾部逗号
+        fixed_str = re.sub(r',\s*([}\]])', r'\1', fixed_str)
+        try:
+            return json.loads(fixed_str)
+        except json.JSONDecodeError:
+            pass
+        
+        # 4.3 修复未转义的换行符
+        fixed_str = re.sub(r'(?<!\\)\n', '\\n', fixed_str)
+        try:
+            return json.loads(fixed_str)
+        except json.JSONDecodeError as e:
+            logging.debug(f"{context} - JSON解析失败: {original_content[:300]}")
+            raise ValueError(f"无法解析JSON: {e}")
+    
+    def _fix_json_quotes(self, s: str) -> str:
+        """修复JSON中的引号问题"""
+        result = []
+        in_string = False
+        i = 0
+        while i < len(s):
+            c = s[i]
+            if c == '\\' and i + 1 < len(s):
+                result.append(c)
+                result.append(s[i+1])
+                i += 2
+                continue
+            if c == '"':
+                in_string = not in_string
+                result.append(c)
+                i += 1
+                continue
+            if c == "'" and not in_string:
+                result.append('"')
+                i += 1
+                continue
+            result.append(c)
+            i += 1
+        return ''.join(result)
     
     def generate_comprehensive_report(
         self,
@@ -429,17 +559,8 @@ class StudentReportGenerator:
             )
             
             content = response.choices[0].message.content
-            # 清理响应
-            content = content.strip()
-            if content.startswith("```json"):
-                content = content[7:]
-            if content.startswith("```"):
-                content = content[3:]
-            if content.endswith("```"):
-                content = content[:-3]
-            content = content.strip()
-            
-            evaluation = json.loads(content)
+            # 使用健壮的JSON解析
+            evaluation = self._clean_and_parse_json(content, "文字评价生成")
             return evaluation
             
         except Exception as e:

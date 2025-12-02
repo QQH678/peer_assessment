@@ -85,6 +85,23 @@ class SemesterSimulator:
             student_agents_map[student.id] = agent
         print(f"   ✓ 创建{len(student_agents_map)}个学生代理")
         
+        # 4.5 初始化学生之间的社交关系（已禁用）
+        # print(f"\n   初始化学生社交关系网络...")
+        # all_student_ids = list(student_agents_map.keys())
+        # for agent in student_agents_map.values():
+        #     agent.initialize_social_relationships(all_student_ids)
+        # 
+        # # 统计初始社交关系
+        # total_friends = 0
+        # total_enemies = 0
+        # for agent in student_agents_map.values():
+        #     for rel in agent.psychology.social.relationships.values():
+        #         if rel > 0.3:
+        #             total_friends += 1
+        #         elif rel < -0.1:
+        #             total_enemies += 1
+        # print(f"   ✓ 社交网络已建立: {total_friends}对朋友关系, {total_enemies}对敌对关系")
+        
         # 5. 逐阶段进行教学模拟
         print(f"\n4. 开始分阶段教学模拟...")
         stage_count = 0
@@ -184,6 +201,47 @@ class SemesterSimulator:
                         print(f"      ✓ 完成{len(analyses)}个学生的分析")
                     except Exception as e:
                         logging.warning(f"教师分析失败: {e}")
+                
+                # 学生根据反馈修改作业（最后一轮之前）
+                if self.peer_config.enable_work_revision and round_num < self.peer_config.rounds_per_stage:
+                    print(f"   → 学生根据反馈修改作业...")
+                    revised_count = 0
+                    for work in stage_works:
+                        agent = student_agents_map.get(work.student_id)
+                        if not agent:
+                            continue
+                        
+                        # 获取该学生在本轮收到的评价
+                        student_received_evals = [
+                            eval_obj.to_dict() 
+                            for eval_obj in round_evaluations 
+                            if eval_obj.work_id == work.id
+                        ]
+                        
+                        if student_received_evals:
+                            try:
+                                revised_work = agent.revise_work(
+                                    original_work=work,
+                                    assignment=assignment,
+                                    received_evaluations=student_received_evals,
+                                    round_number=round_num
+                                )
+                                
+                                # 更新stage_works中的作业
+                                work_index = stage_works.index(work)
+                                stage_works[work_index] = revised_work
+                                
+                                # 更新semester.works中的对应作业
+                                for i, sem_work in enumerate(semester.works):
+                                    if sem_work.id == work.id:
+                                        semester.works[i] = revised_work
+                                        break
+                                
+                                revised_count += 1
+                            except Exception as e:
+                                logging.warning(f"学生 {agent.student.name} 作业修改失败: {e}")
+                    
+                    print(f"      ✓ {revised_count}/{len(stage_works)}个学生完成作业修改")
                 
                 # 学生推进到下一轮（触发记忆巩固）
                 if self.use_new_memory:

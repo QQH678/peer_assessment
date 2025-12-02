@@ -8,6 +8,8 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 import logging
 import openai
+import re
+import json
 from config.settings import Config
 
 
@@ -164,6 +166,183 @@ class TeacherAnalyzer:
             return obj.get(attr, default)
         return getattr(obj, attr, default)
     
+    def _get_evaluation_content(self, evaluation) -> str:
+        """从评价对象中提取评价内容，支持多种字段名"""
+        # 尝试多种可能的字段名
+        possible_fields = ['overall_comment', 'content', 'comment', 'comments', 'evaluation_content']
+        
+        for field in possible_fields:
+            content = self.safe_get(evaluation, field, None)
+            if content:
+                # 如果是字典类型的comments，尝试提取overall
+                if isinstance(content, dict):
+                    if 'overall' in content:
+                        return str(content['overall'])
+                    # 否则合并所有值
+                    return '\n'.join(str(v) for v in content.values() if v)
+                return str(content)
+        
+        # 如果有scores，生成一个基于分数的描述
+        scores = self.safe_get(evaluation, 'scores', None)
+        if scores:
+            if hasattr(scores, '__dict__'):
+                scores = scores.__dict__
+            if isinstance(scores, dict):
+                score_desc = ', '.join(f"{k}: {v}" for k, v in scores.items() if v is not None)
+                return f"评分: {score_desc}"
+        
+        return "（无评价内容）"
+    
+    def _clean_and_parse_json(self, content: str, context: str = "JSON解析") -> dict:
+        """
+        健壮的JSON解析方法，处理LLM返回的各种异常格式
+        
+        Args:
+            content: LLM返回的原始内容
+            context: 调用上下文，用于错误日志
+            
+        Returns:
+            解析后的字典
+        """
+        if not content:
+            raise ValueError("空内容")
+        
+        original_content = content
+        content = content.strip()
+        
+        # 1. 移除markdown代码块标记
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0]
+        elif "```" in content:
+            # 处理可能的多个代码块，只取第一个
+            parts = content.split("```")
+            if len(parts) >= 2:
+                content = parts[1]
+                # 如果第一个字符是语言标识（如json, python等），移除第一行
+                if content.strip() and not content.strip()[0] in '{}[]':
+                    lines = content.split('\n', 1)
+                    if len(lines) > 1:
+                        content = lines[1]
+        
+        content = content.strip()
+        
+        # 2. 找到JSON对象的开始和结束
+        start_idx = -1
+        
+        # 找第一个 { 或 [
+        for i, c in enumerate(content):
+            if c in '{}[]':
+                start_idx = i
+                break
+        
+        if start_idx == -1:
+            raise ValueError(f"未找到JSON开始标记: {content[:100]}")
+        
+        # 找匹配的结束标记
+        bracket_type = content[start_idx]
+        close_bracket = '}' if bracket_type == '{' else ']'
+        depth = 0
+        in_string = False
+        escape_next = False
+        end_idx = -1
+        
+        for i in range(start_idx, len(content)):
+            c = content[i]
+            
+            if escape_next:
+                escape_next = False
+                continue
+            
+            if c == '\\':
+                escape_next = True
+                continue
+            
+            if c == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            
+            if in_string:
+                continue
+            
+            if c == bracket_type:
+                depth += 1
+            elif c == close_bracket:
+                depth -= 1
+                if depth == 0:
+                    end_idx = i
+                    break
+        
+        if end_idx == -1:
+            # 尝试找最后一个匹配的括号
+            end_idx = content.rfind(close_bracket)
+        
+        if end_idx == -1 or end_idx <= start_idx:
+            raise ValueError(f"未找到完整的JSON对象: {content[:200]}")
+        
+        json_str = content[start_idx:end_idx+1]
+        
+        # 3. 尝试直接解析
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
+        
+        # 4. 尝试修复常见问题
+        # 4.1 替换单引号为双引号（在字符串外部）
+        fixed_str = self._fix_quotes(json_str)
+        try:
+            return json.loads(fixed_str)
+        except json.JSONDecodeError:
+            pass
+        
+        # 4.2 尝试移除尾部逗号
+        fixed_str = re.sub(r',\s*([}\]])', r'\1', fixed_str)
+        try:
+            return json.loads(fixed_str)
+        except json.JSONDecodeError:
+            pass
+        
+        # 4.3 尝试修复未转义的换行符
+        fixed_str = fixed_str.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+        try:
+            return json.loads(fixed_str)
+        except json.JSONDecodeError as e:
+            logging.debug(f"{context} - 所有修复尝试失败，原始内容: {original_content[:500]}")
+            raise ValueError(f"无法解析JSON: {e}")
+    
+    def _fix_quotes(self, s: str) -> str:
+        """修复JSON中的引号问题"""
+        result = []
+        in_string = False
+        i = 0
+        while i < len(s):
+            c = s[i]
+            
+            # 处理转义
+            if c == '\\' and i + 1 < len(s):
+                result.append(c)
+                result.append(s[i+1])
+                i += 2
+                continue
+            
+            # 处理双引号
+            if c == '"':
+                in_string = not in_string
+                result.append(c)
+                i += 1
+                continue
+            
+            # 处理单引号（仅在字符串外部替换）
+            if c == "'" and not in_string:
+                result.append('"')
+                i += 1
+                continue
+            
+            result.append(c)
+            i += 1
+        
+        return ''.join(result)
+    
     def __init__(self):
         self.client = openai.OpenAI(
             api_key=Config.OPENAI_API_KEY,
@@ -257,7 +436,7 @@ class TeacherAnalyzer:
             knowledge_points = []
         
         # 构建分析提示词
-        prompt = f"""作为一名经验丰富的教师，请分析学生在本轮作业中的知识掌握情况。
+        prompt = f"""作为一名经验丰富且鼓励学生的教师，请分析学生在本轮作业中的知识掌握情况。
 
 作业信息：
 - 题目：{assignment_title}
@@ -267,15 +446,22 @@ class TeacherAnalyzer:
 作业内容摘要：
 {str(self.safe_get(student_work, 'content', '无内容'))[:500]}...
 
+⚠️ 评估指导原则：
+- 知识掌握度应该基于学生展示出的理解程度，而非完美标准
+- 只要学生展示了对概念的基本理解，掌握度至少应该在0.5以上
+- 能够正确应用知识点的学生，掌握度应该在0.7以上
+- 只有完全没有展示理解的情况才给0.3以下
+- 要看到学生的努力和进步潜力
+
 请分析：
-1. 学生对各个知识点的掌握程度（0-1之间的分数）
+1. 学生对各个知识点的掌握程度（0-1之间的分数，参考上述指导）
 2. 发现的错误模式和知识盲点
 3. 学生的强项和弱项
 
 返回JSON格式：
 {{
-    "knowledge_mastery": {{"知识点1": 0.8, "知识点2": 0.6}},
-    "error_patterns": ["错误模式1", "错误模式2"],
+    "knowledge_mastery": {{"知识点1": 0.75, "知识点2": 0.65}},
+    "error_patterns": ["错误模式1"],
     "knowledge_gaps": ["知识盲点1"],
     "strengths": ["强项1", "强项2"],
     "weaknesses": ["弱项1"]
@@ -292,15 +478,8 @@ class TeacherAnalyzer:
                 temperature=0.3
             )
             
-            import json
             content = response.choices[0].message.content
-            # 清理markdown格式
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0]
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0]
-            
-            analysis_data = json.loads(content.strip())
+            analysis_data = self._clean_and_parse_json(content, "知识状态分析")
             
             # 计算增长
             knowledge_growth = {}
@@ -340,14 +519,14 @@ class TeacherAnalyzer:
     ) -> MetacognitionAssessment:
         """评估元认知能力"""
         
-        # 构建评估提示词
+        # 构建评估提示词 - 使用正确的字段提取方法
         eval_given_summary = "\n".join([
-            f"- 评价{i+1}: {self.safe_get(ev, 'content', '')[:100]}..." 
+            f"- 评价{i+1}: {self._get_evaluation_content(ev)[:200]}..." 
             for i, ev in enumerate(evaluations_given[:3])
         ]) if evaluations_given else "未评价他人"
         
         eval_received_summary = "\n".join([
-            f"- 收到{i+1}: {self.safe_get(ev, 'content', '')[:100]}..."
+            f"- 收到{i+1}: {self._get_evaluation_content(ev)[:200]}..."
             for i, ev in enumerate(evaluations_received[:3])
         ]) if evaluations_received else "未收到评价"
         
@@ -422,14 +601,8 @@ class TeacherAnalyzer:
                 temperature=0.3
             )
             
-            import json
             content = response.choices[0].message.content
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0]
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0]
-            
-            data = json.loads(content.strip())
+            data = self._clean_and_parse_json(content, "元认知评估")
             
             # 计算三阶段得分
             forethought = (data["goal_setting"] + data["strategic_planning"]) / 2.0
@@ -503,9 +676,9 @@ class TeacherAnalyzer:
                 evaluation_summary="未评价他人"
             )
         
-        # 分析评价内容
+        # 分析评价内容 - 支持多种字段名
         evaluations_text = "\n\n".join([
-            f"评价{i+1}:\n{self.safe_get(ev, 'content', '')}"
+            f"评价{i+1}:\n{self._get_evaluation_content(ev)}"
             for i, ev in enumerate(evaluations_given)
         ])
         
@@ -540,14 +713,8 @@ class TeacherAnalyzer:
                 temperature=0.3
             )
             
-            import json
             content = response.choices[0].message.content
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0]
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0]
-            
-            data = json.loads(content.strip())
+            data = self._clean_and_parse_json(content, "互评质量评估")
             
             overall = (data["depth"] + data["accuracy"] + data["constructiveness"]) / 3.0
             
@@ -614,14 +781,8 @@ class TeacherAnalyzer:
                 temperature=0.7
             )
             
-            import json
             content = response.choices[0].message.content
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0]
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0]
-            
-            return json.loads(content.strip())
+            return self._clean_and_parse_json(content, "反馈生成")
             
         except Exception as e:
             logging.error(f"反馈生成失败: {e}")

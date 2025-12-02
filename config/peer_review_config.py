@@ -17,6 +17,9 @@ class PeerReviewConfig:
     reviews_per_work: int = Config.REVIEWS_PER_WORK
     days_per_round: int = Config.DAYS_PER_ROUND
     
+    # 作业修订配置
+    enable_work_revision: bool = True
+    
     # 记忆配置
     stm_retention_rounds: int = Config.STM_RETENTION_ROUNDS
     ltm_consolidation_rounds: int = Config.LTM_CONSOLIDATION_ROUNDS

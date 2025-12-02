@@ -15,6 +15,11 @@ COURSE_TEMPLATES: Dict[str, Dict[str, Any]] = {
             "计算机网络", "操作系统", "人工智能", "机器学习",
             "计算机科学", "软件开发"
         ],
+        "comment_length": {
+            "min": 50,
+            "max": 150,
+            "description": "典型K12/大学编程课程，简洁实用"
+        },
         "evaluation_dimensions": [
             {
                 "key": "functionality",
@@ -51,6 +56,11 @@ COURSE_TEMPLATES: Dict[str, Dict[str, Any]] = {
             "学术写作", "技术写作", "创意写作", "文献综述",
             "论文写作", "新闻写作", "商务写作"
         ],
+        "comment_length": {
+            "min": 150,
+            "max": 300,
+            "description": "写作类课程需要详细分析和具体建议"
+        },
         "evaluation_dimensions": [
             {
                 "key": "content_quality",
@@ -87,6 +97,11 @@ COURSE_TEMPLATES: Dict[str, Dict[str, Any]] = {
             "UI设计", "UX设计", "平面设计", "产品设计",
             "交互设计", "视觉设计", "工业设计"
         ],
+        "comment_length": {
+            "min": 80,
+            "max": 200,
+            "description": "设计类课程需要对美学和功能进行评价"
+        },
         "evaluation_dimensions": [
             {
                 "key": "aesthetics",
@@ -123,6 +138,11 @@ COURSE_TEMPLATES: Dict[str, Dict[str, Any]] = {
             "经济学", "管理学", "社会学", "心理学",
             "哲学", "政治学", "法学", "教育学"
         ],
+        "comment_length": {
+            "min": 200,
+            "max": 400,
+            "description": "理论分析需要结构化论证和详细说明"
+        },
         "evaluation_dimensions": [
             {
                 "key": "understanding",
@@ -159,6 +179,11 @@ COURSE_TEMPLATES: Dict[str, Dict[str, Any]] = {
             "物理实验", "化学实验", "生物实验", "工程实验",
             "材料实验", "电子实验"
         ],
+        "comment_length": {
+            "min": 100,
+            "max": 200,
+            "description": "实验类课程需要针对步骤和数据分析"
+        },
         "evaluation_dimensions": [
             {
                 "key": "procedure",
@@ -195,6 +220,11 @@ COURSE_TEMPLATES: Dict[str, Dict[str, Any]] = {
             "高等数学", "线性代数", "概率论", "离散数学",
             "数学分析", "抽象代数", "数理统计"
         ],
+        "comment_length": {
+            "min": 80,
+            "max": 150,
+            "description": "数学课程重点关注推导正确性和严谨性"
+        },
         "evaluation_dimensions": [
             {
                 "key": "correctness",
@@ -228,6 +258,11 @@ COURSE_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "name": "通用课程",
         "name_en": "Generic",
         "subjects": [],  # 匹配所有未指定的课程
+        "comment_length": {
+            "min": 60,
+            "max": 120,
+            "description": "通用课程的基本互评要求"
+        },
         "evaluation_dimensions": [
             {
                 "key": "content_quality",
@@ -273,3 +308,43 @@ def get_subjects_by_type(course_type: str) -> List[str]:
     """获取课程类型对应的科目列表"""
     template = get_course_template(course_type)
     return template.get("subjects", [])
+
+
+def get_comment_length_limit(course_type: str) -> Dict[str, Any]:
+    """获取课程类型对应的互评字数限制
+    
+    返回示例：
+    {
+        "min": 50,
+        "max": 150,
+        "description": "典型K12/大学编程课程，简洁实用"
+    }
+    """
+    template = get_course_template(course_type)
+    return template.get("comment_length", {
+        "min": 60,
+        "max": 120,
+        "description": "默认字数限制"
+    })
+
+
+def detect_course_type(subject: str) -> str:
+    """根据课程名称自动检测课程类型
+    
+    Args:
+        subject: 课程名称
+        
+    Returns:
+        课程类型 (programming, writing, design, theory, experiment, mathematics, generic)
+    """
+    # 遍历所有课程模板，查找匹配的科目
+    for course_type, template in COURSE_TEMPLATES.items():
+        if course_type == "generic":
+            continue
+        subjects = template.get("subjects", [])
+        for template_subject in subjects:
+            if template_subject in subject or subject in template_subject:
+                return course_type
+    
+    # 如果没有匹配，返回通用类型
+    return "generic"

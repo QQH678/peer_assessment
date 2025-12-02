@@ -1,6 +1,7 @@
 import random
 import uuid
 from typing import List, Dict, Any
+import numpy as np
 from faker import Faker
 from models.data_models import Student, StudentType
 from config.settings import Config
@@ -39,6 +40,10 @@ class StudentGenerator:
     
     def _calculate_type_distribution(self, total_count: int) -> Dict[str, int]:
         """计算各学生类型的数量分布"""
+        # 小样本优化：确保每种类型至少有机会被选中
+        if total_count <= 10:
+            return self._calculate_small_sample_distribution(total_count)
+        
         distribution = {}
         remaining = total_count
         
@@ -50,6 +55,29 @@ class StudentGenerator:
                 count = int(total_count * config["ratio"])
                 distribution[student_type] = count
                 remaining -= count
+        
+        return distribution
+    
+    def _calculate_small_sample_distribution(self, total_count: int) -> Dict[str, int]:
+        """小样本分配策略：使用加权随机采样，确保多样性"""
+        import numpy as np
+        
+        # 获取类型和权重
+        types = list(Config.STUDENT_TYPES.keys())
+        weights = [Config.STUDENT_TYPES[t]["ratio"] for t in types]
+        
+        # 使用加权随机采样（不放回）
+        selected_types = np.random.choice(
+            types, 
+            size=total_count, 
+            replace=True,  # 允许重复，但通过权重控制
+            p=weights
+        )
+        
+        # 统计各类型数量
+        distribution = {t: 0 for t in types}
+        for t in selected_types:
+            distribution[t] += 1
         
         return distribution
     

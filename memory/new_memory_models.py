@@ -330,6 +330,10 @@ def softmax_with_temperature(scores: List[float], temperature: float) -> List[fl
     # 温度调整
     adjusted_scores = np.array(scores) / temperature
     
+    # 处理空数组情况
+    if len(adjusted_scores) == 0:
+        return []
+    
     # softmax
     exp_scores = np.exp(adjusted_scores - np.max(adjusted_scores))  # 数值稳定
     probabilities = exp_scores / np.sum(exp_scores)
